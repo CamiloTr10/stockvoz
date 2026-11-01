@@ -1,0 +1,39 @@
+# Corre `node --test` en cada push y pull request, contra un PostgreSQL 17 temporal.
+name: Pruebas
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:17
+        # Contraseña de un contenedor desechable que solo existe durante la corrida; no es un secreto.
+        env:
+          POSTGRES_USER: stockvoz
+          POSTGRES_PASSWORD: stockvoz
+          POSTGRES_DB: stockvoz_prueba
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stockvoz"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL_PRUEBA: postgres://stockvoz:stockvoz@localhost:5432/stockvoz_prueba
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node --test

@@ -74,6 +74,9 @@ node --test
 roles, stock insuficiente, ventas simultáneas, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
 Las de la API usan `DATABASE_URL_PRUEBA` y se niegan a correr si esa base no termina en `_prueba`.
 
+En GitHub corren solas en cada push y pull request (GitHub Actions, `.github/workflows/pruebas.yml`),
+contra un PostgreSQL 17 temporal. El resultado aparece en la pestaña **Actions** del repositorio.
+
 ## Estructura
 
 ```
