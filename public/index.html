@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#2a3cf5">
+  <meta name="description" content="StockVoz: registra ventas, entradas y mermas de inventario hablando o escribiendo.">
+  <title>StockVoz</title>
+  <link rel="icon" type="image/svg+xml" href="logo.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..900&family=Figtree:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="sin-sesion">
+  <a class="skip-link" href="#vista">Saltar al contenido</a>
+
+  <header class="barra">
+    <a href="#/panel" class="marca" aria-label="StockVoz, ir al inicio">
+      <img src="logo.svg" alt="" width="34" height="34">
+      <span>StockVoz</span>
+    </a>
+    <div class="barra-negocio">
+      <span id="negocio-actual"></span>
+      <button type="button" class="enlace" id="btn-cambiar" hidden>Cambiar negocio</button>
+      <button type="button" class="enlace" id="btn-salir">Salir</button>
+    </div>
+  </header>
+
+  <nav class="nav" aria-label="Secciones">
+    <a href="#/panel" data-ruta="#/panel"><i class="material-icons" aria-hidden="true">dashboard</i><span>Inicio</span></a>
+    <a href="#/inventario" data-ruta="#/inventario"><i class="material-icons" aria-hidden="true">inventory_2</i><span>Inventario</span></a>
+    <a href="#/registrar" data-ruta="#/registrar" class="nav-principal"><i class="material-icons" aria-hidden="true">mic</i><span>Registrar</span></a>
+    <a href="#/movimientos" data-ruta="#/movimientos"><i class="material-icons" aria-hidden="true">swap_vert</i><span>Movimientos</span></a>
+    <a href="#/reportes" data-ruta="#/reportes"><i class="material-icons" aria-hidden="true">bar_chart</i><span>Reportes</span></a>
+  </nav>
+
+  <main id="vista" tabindex="-1">
+    <p class="cargando">Cargando…</p>
+  </main>
+
+  <div id="aviso" class="aviso" role="status" aria-live="polite"></div>
+
+  <noscript><p class="noscript">StockVoz necesita JavaScript para funcionar.</p></noscript>
+  <script src="app.js"></script>
+</body>
+</html>

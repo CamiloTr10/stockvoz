@@ -1,0 +1,195 @@
+'use strict';
+// Servidor de StockVoz: API JSON + archivos de la interfaz (carpeta public/).
+// Uso: node servidor.js   (variables opcionales: PORT, STOCKVOZ_DB, STOCKVOZ_DEMO=0)
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const db = require('./src/db');
+const auth = require('./src/auth');
+const inv = require('./src/inventario');
+const { interpretar } = require('./src/interprete');
+const { sembrarSiVacia } = require('./src/demo');
+const { ErrorApi } = require('./src/errores');
+
+const PUBLICO = path.join(__dirname, 'public');
+const MAX_CUERPO = 16 * 1024;
+const COOKIE = 'sv_sesion';
+const TIPOS_ARCHIVO = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
+const CABECERAS = {
+  'Content-Security-Policy': "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'X-Frame-Options': 'DENY',
+  'Permissions-Policy': 'microphone=(self), camera=(), geolocation=()'
+};
+
+function leerCookie(req) {
+  const m = (req.headers.cookie || '').match(new RegExp('(?:^|;\\s*)' + COOKIE + '=([^;]+)'));
+  return m ? m[1] : null;
+}
+
+function cookieSesion(token, segura) {
+  const base = COOKIE + '=' + token + '; Path=/; HttpOnly; SameSite=Strict' + (segura ? '; Secure' : '');
+  return token ? base + '; Max-Age=' + auth.DURACION_SESION_MS / 1000 : COOKIE + '=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0';
+}
+
+function responder(res, estado, datos, extra) {
+  res.writeHead(estado, Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, CABECERAS, extra));
+  res.end(JSON.stringify(datos));
+}
+
+function leerCuerpo(req) {
+  return new Promise(function (resolver, rechazar) {
+    if (req.method === 'GET' || req.method === 'DELETE') { return resolver({}); }
+    // Exigir JSON evita que un formulario de otro sitio dispare acciones (CSRF).
+    if (!/^application\/json\b/.test(req.headers['content-type'] || '')) {
+      return rechazar(new ErrorApi(415, 'El cuerpo debe enviarse como JSON.'));
+    }
+    let tam = 0;
+    const partes = [];
+    req.on('data', function (c) {
+      tam += c.length;
+      if (tam > MAX_CUERPO) { rechazar(new ErrorApi(413, 'La petición es demasiado grande.')); req.destroy(); return; }
+      partes.push(c);
+    });
+    req.on('end', function () {
+      try {
+        const datos = partes.length ? JSON.parse(Buffer.concat(partes).toString('utf8')) : {};
+        resolver(datos && typeof datos === 'object' && !Array.isArray(datos) ? datos : {});
+      } catch (e) { rechazar(new ErrorApi(400, 'El JSON enviado no es válido.')); }
+    });
+    req.on('error', rechazar);
+  });
+}
+
+function estadoSesion(sesion) {
+  return { usuario: sesion.usuario, negocios: sesion.negocios, negocio: sesion.negocio, rol: sesion.rol };
+}
+
+function crearApp(opciones) {
+  const base = db.abrir(opciones.rutaDb);
+  const ahora = opciones.ahora || function () { return new Date(); };
+  if (opciones.demo !== false) { sembrarSiVacia(base, ahora()); }
+  // La pantalla de ingreso muestra las cuentas de prueba solo si existen.
+  const demo = opciones.demo !== false && Boolean(base.prepare("SELECT 1 FROM usuarios WHERE correo = 'demo@stockvoz.test'").get());
+  const limitador = auth.crearLimitador();
+  const segura = Boolean(opciones.cookieSegura);
+
+  // Rutas: [método, patrón, requiere ('nada' | 'sesion' | 'negocio' | 'dueno'), manejador]
+  const RUTAS = [
+    ['GET', /^\/api\/config$/, 'nada', function () { return { demo: demo }; }],
+    ['POST', /^\/api\/registro$/, 'nada', function (c) {
+      const r = auth.registrar(base, c.cuerpo);
+      const token = auth.crearSesion(base, r.usuarioId, r.negocioId);
+      c.cookie = cookieSesion(token, segura);
+      c.estado = 201;
+      return estadoSesion(auth.leerSesion(base, token));
+    }],
+    ['POST', /^\/api\/sesion$/, 'nada', function (c) {
+      const clave = String(c.cuerpo.correo || '').toLowerCase() + '|' + c.ip;
+      limitador.revisar(clave);
+      let usuarioId;
+      try { usuarioId = auth.autenticar(base, c.cuerpo.correo, c.cuerpo.clave); }
+      catch (e) { limitador.fallo(clave); throw e; }
+      limitador.exito(clave);
+      const negocios = auth.negociosDe(base, usuarioId);
+      const token = auth.crearSesion(base, usuarioId, negocios.length === 1 ? negocios[0].id : null);
+      c.cookie = cookieSesion(token, segura);
+      return estadoSesion(auth.leerSesion(base, token));
+    }],
+    ['GET', /^\/api\/sesion$/, 'sesion', function (c) { return estadoSesion(c.sesion); }],
+    ['DELETE', /^\/api\/sesion$/, 'nada', function (c) {
+      auth.cerrarSesion(base, c.token);
+      c.cookie = cookieSesion(null, segura);
+      return { ok: true };
+    }],
+    ['POST', /^\/api\/sesion\/negocio$/, 'sesion', function (c) {
+      auth.elegirNegocio(base, c.sesion, Number(c.cuerpo.negocioId));
+      return estadoSesion(auth.leerSesion(base, c.token));
+    }],
+    ['GET', /^\/api\/productos$/, 'negocio', function (c) {
+      return inv.listarProductos(base, c.negocioId, c.url.searchParams.get('inactivos') === '1');
+    }],
+    ['POST', /^\/api\/productos$/, 'dueno', function (c) {
+      c.estado = 201;
+      return inv.crearProducto(base, c.negocioId, c.sesion.usuario.id, c.cuerpo);
+    }],
+    ['PATCH', /^\/api\/productos\/(\d+)$/, 'dueno', function (c) {
+      return inv.actualizarProducto(base, c.negocioId, Number(c.params[1]), c.cuerpo);
+    }],
+    ['POST', /^\/api\/interpretar$/, 'negocio', function (c) {
+      const texto = typeof c.cuerpo.texto === 'string' ? c.cuerpo.texto.slice(0, 300) : '';
+      const catalogo = inv.listarProductos(base, c.negocioId, false);
+      return interpretar(texto, catalogo);
+    }],
+    ['POST', /^\/api\/movimientos$/, 'negocio', function (c) {
+      c.estado = 201;
+      return inv.registrarMovimiento(base, c.negocioId, c.sesion.usuario.id, Object.assign({}, c.cuerpo, { ahora: ahora() }));
+    }],
+    ['GET', /^\/api\/movimientos$/, 'negocio', function (c) {
+      return inv.listarMovimientos(base, c.negocioId, { tipo: c.url.searchParams.get('tipo'), limite: c.url.searchParams.get('limite') });
+    }],
+    ['GET', /^\/api\/panel$/, 'negocio', function (c) { return inv.panel(base, c.negocioId, ahora()); }],
+    ['GET', /^\/api\/reportes$/, 'negocio', function (c) {
+      return inv.reporte(base, c.negocioId, ahora(), Number(c.url.searchParams.get('dias')));
+    }]
+  ];
+
+  async function manejarApi(req, res, url) {
+    const candidatas = RUTAS.filter(function (r) { return r[1].test(url.pathname); });
+    const ruta = candidatas.find(function (r) { return r[0] === req.method; });
+    if (!ruta) {
+      throw new ErrorApi(candidatas.length ? 405 : 404, candidatas.length ? 'Método no permitido.' : 'Ruta no encontrada.');
+    }
+    const c = { url: url, params: ruta[1].exec(url.pathname), token: leerCookie(req), ip: req.socket.remoteAddress, estado: 200, cookie: null };
+    c.cuerpo = await leerCuerpo(req);
+    if (ruta[2] !== 'nada') {
+      c.sesion = auth.leerSesion(base, c.token);
+      if (!c.sesion) { throw new ErrorApi(401, 'Tu sesión terminó. Vuelve a ingresar.'); }
+      if (ruta[2] !== 'sesion') {
+        if (!c.sesion.negocio) { throw new ErrorApi(409, 'Primero elige un negocio.'); }
+        if (ruta[2] === 'dueno' && c.sesion.rol !== 'dueno') { throw new ErrorApi(403, 'Solo el dueño del negocio puede hacer esto.'); }
+        c.negocioId = c.sesion.negocio.id;
+      }
+    }
+    const datos = ruta[3](c);
+    responder(res, c.estado, datos, c.cookie ? { 'Set-Cookie': c.cookie } : null);
+  }
+
+  function servirArchivo(res, url) {
+    let ruta;
+    try { ruta = decodeURIComponent(url.pathname); } catch (e) { res.writeHead(400, CABECERAS); return res.end(); }
+    const archivo = path.join(PUBLICO, path.normalize(ruta === '/' ? 'index.html' : ruta.slice(1)));
+    if (!archivo.startsWith(PUBLICO + path.sep)) { res.writeHead(403, CABECERAS); return res.end(); }
+    fs.readFile(archivo, function (err, datos) {
+      if (err) { res.writeHead(404, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8' }, CABECERAS)); return res.end('No encontrado'); }
+      res.writeHead(200, Object.assign({ 'Content-Type': TIPOS_ARCHIVO[path.extname(archivo)] || 'application/octet-stream', 'Cache-Control': 'no-cache' }, CABECERAS));
+      res.end(datos);
+    });
+  }
+
+  const servidor = http.createServer(function (req, res) {
+    let url;
+    try { url = new URL(req.url, 'http://localhost'); } catch (e) { res.writeHead(400); return res.end(); }
+    if (!url.pathname.startsWith('/api/')) { return servirArchivo(res, url); }
+    manejarApi(req, res, url).catch(function (e) {
+      if (e instanceof ErrorApi) { return responder(res, e.estado, { error: e.message }); }
+      console.error(e);
+      responder(res, 500, { error: 'Ocurrió un error inesperado. Inténtalo de nuevo.' });
+    });
+  });
+  servidor.on('close', function () { base.close(); });
+  return servidor;
+}
+
+if (require.main === module) {
+  const rutaDb = process.env.STOCKVOZ_DB || path.join(__dirname, 'datos', 'stockvoz.db');
+  fs.mkdirSync(path.dirname(rutaDb), { recursive: true });
+  const puerto = Number(process.env.PORT) || 3000;
+  // En producción (HTTPS) usar STOCKVOZ_COOKIE_SEGURA=1 para que la cookie solo viaje cifrada.
+  crearApp({ rutaDb: rutaDb, demo: process.env.STOCKVOZ_DEMO !== '0', cookieSegura: process.env.STOCKVOZ_COOKIE_SEGURA === '1' }).listen(puerto, function () {
+    console.log('StockVoz escuchando en http://localhost:' + puerto);
+  });
+}
+
+module.exports = { crearApp };

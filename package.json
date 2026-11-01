@@ -1,0 +1,14 @@
+{
+  "name": "stockvoz-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Prototipo funcional de StockVoz: inventario y ventas registrados por voz o texto.",
+  "main": "servidor.js",
+  "scripts": {
+    "start": "node servidor.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

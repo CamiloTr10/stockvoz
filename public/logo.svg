@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 38 38" width="38" height="38" role="img" aria-label="Logotipo de StockVoz">
+  <rect x="1" y="1" width="36" height="36" rx="9" fill="#2a3cf5" stroke="#0d1233" stroke-width="2"/>
+  <rect x="6" y="14" width="3.6" height="10" rx="1.8" fill="#fff"/>
+  <rect x="11.4" y="9" width="3.6" height="20" rx="1.8" fill="#fff"/>
+  <rect x="16.8" y="5.5" width="4.4" height="27" rx="2.2" fill="#ffd23f"/>
+  <rect x="23" y="11" width="3.6" height="16" rx="1.8" fill="#fff"/>
+  <rect x="28.4" y="15" width="3.6" height="8" rx="1.8" fill="#fff"/>
+</svg>
