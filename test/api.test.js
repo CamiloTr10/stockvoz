@@ -1,15 +1,25 @@
 'use strict';
-// Pruebas de la API de punta a punta: servidor real en un puerto libre y base en memoria.
+// Pruebas de la API de punta a punta: servidor real en un puerto libre y la base de pruebas
+// de PostgreSQL (DATABASE_URL_PRUEBA), que se vacía al empezar.
 const test = require('node:test');
 const assert = require('node:assert');
+const { Client } = require('pg');
 const { crearApp } = require('../servidor');
 
 let servidor;
 let base;
 
-test.before(function () {
-  servidor = crearApp({ rutaDb: ':memory:', demo: true });
-  return new Promise(function (r) { servidor.listen(0, '127.0.0.1', function () { base = 'http://127.0.0.1:' + servidor.address().port; r(); }); });
+test.before(async function () {
+  const url = process.env.DATABASE_URL_PRUEBA;
+  assert.ok(url, 'Falta DATABASE_URL_PRUEBA en .env (ver .env.example).');
+  // Protección: estas pruebas borran las tablas, así que nunca se corren contra la base real.
+  assert.match(new URL(url).pathname, /_prueba$/, 'La base de pruebas debe llamarse algo_prueba.');
+  const c = new Client({ connectionString: url });
+  await c.connect();
+  await c.query('DROP TABLE IF EXISTS movimientos, productos, sesiones, membresias, usuarios, negocios');
+  await c.end();
+  servidor = await crearApp({ urlDb: url, demo: true });
+  await new Promise(function (r) { servidor.listen(0, '127.0.0.1', function () { base = 'http://127.0.0.1:' + servidor.address().port; r(); }); });
 });
 test.after(function () { servidor.close(); });
 
@@ -94,6 +104,19 @@ test('no se puede vender más de lo que hay (409) y el stock no cambia', async f
   assert.match(r.datos.error, /Stock insuficiente/);
   const despues = (await s.api('GET', '/api/productos')).datos.find(function (x) { return x.id === p.id; });
   assert.strictEqual(despues.stock, p.stock);
+});
+
+test('ventas simultáneas del mismo producto no dejan el stock negativo', async function () {
+  const s = await ingresar('demo@stockvoz.test');
+  await elegir(s.api, s.sesion, 'Tienda');
+  const p = (await s.api('POST', '/api/productos', { nombre: 'Panela', precio: 3000, stock: 5 })).datos;
+  const r = await Promise.all([1, 2, 3, 4, 5].map(function () {
+    return s.api('POST', '/api/movimientos', { productoId: p.id, tipo: 'venta', cantidad: 2 });
+  }));
+  const estados = r.map(function (x) { return x.estado; }).sort();
+  assert.deepStrictEqual(estados, [201, 201, 409, 409, 409]);
+  const despues = (await s.api('GET', '/api/productos')).datos.find(function (x) { return x.id === p.id; });
+  assert.strictEqual(despues.stock, 1);
 });
 
 test('cantidades inválidas se rechazan con 400', async function () {

@@ -2,7 +2,7 @@
 // Cuentas, contraseñas y sesiones. Cada sesión queda atada a un negocio (tenant) y todas las
 // consultas de inventario usan ese negocio, nunca uno que venga en la petición.
 const crypto = require('node:crypto');
-const { transaccion } = require('./db');
+const { uno, todos, transaccion, esDuplicado } = require('./db');
 const { ErrorApi } = require('./errores');
 
 const DURACION_SESION_MS = 8 * 60 * 60 * 1000;
@@ -44,26 +44,26 @@ function validarCorreo(valor) {
   return correo;
 }
 
-function crearSesion(db, usuarioId, negocioId) {
+async function crearSesion(db, usuarioId, negocioId) {
   const token = crypto.randomBytes(32).toString('base64url');
-  db.prepare('DELETE FROM sesiones WHERE expira_en < ?').run(Date.now());
-  db.prepare('INSERT INTO sesiones (token_hash, usuario_id, negocio_id, expira_en) VALUES (?, ?, ?, ?)')
-    .run(hashToken(token), usuarioId, negocioId || null, Date.now() + DURACION_SESION_MS);
+  await db.query('DELETE FROM sesiones WHERE expira_en < $1', [Date.now()]);
+  await db.query('INSERT INTO sesiones (token_hash, usuario_id, negocio_id, expira_en) VALUES ($1, $2, $3, $4)',
+    [hashToken(token), usuarioId, negocioId || null, Date.now() + DURACION_SESION_MS]);
   return token;
 }
 
 function negociosDe(db, usuarioId) {
-  return db.prepare('SELECT n.id, n.nombre, m.rol FROM membresias m JOIN negocios n ON n.id = m.negocio_id WHERE m.usuario_id = ? ORDER BY n.nombre')
-    .all(usuarioId);
+  return todos(db, 'SELECT n.id, n.nombre, m.rol FROM membresias m JOIN negocios n ON n.id = m.negocio_id WHERE m.usuario_id = $1 ORDER BY lower(n.nombre), n.id',
+    [usuarioId]);
 }
 
 // Devuelve { usuario, negocios, negocio, rol, tokenHash } o null si la sesión no vale.
-function leerSesion(db, token) {
+async function leerSesion(db, token) {
   if (!token) { return null; }
-  const fila = db.prepare('SELECT s.token_hash, s.negocio_id, s.expira_en, u.id, u.nombre, u.correo FROM sesiones s JOIN usuarios u ON u.id = s.usuario_id WHERE s.token_hash = ?')
-    .get(hashToken(token));
+  const fila = await uno(db, 'SELECT s.token_hash, s.negocio_id, s.expira_en, u.id, u.nombre, u.correo FROM sesiones s JOIN usuarios u ON u.id = s.usuario_id WHERE s.token_hash = $1',
+    [hashToken(token)]);
   if (!fila || fila.expira_en < Date.now()) { return null; }
-  const negocios = negociosDe(db, fila.id);
+  const negocios = await negociosDe(db, fila.id);
   // Si le quitaron el acceso al negocio, la sesión vuelve a pedir que elija uno.
   const actual = negocios.find(function (n) { return n.id === fila.negocio_id; }) || null;
   return {
@@ -75,34 +75,38 @@ function leerSesion(db, token) {
   };
 }
 
-function cerrarSesion(db, token) {
-  if (token) { db.prepare('DELETE FROM sesiones WHERE token_hash = ?').run(hashToken(token)); }
+async function cerrarSesion(db, token) {
+  if (token) { await db.query('DELETE FROM sesiones WHERE token_hash = $1', [hashToken(token)]); }
 }
 
-function elegirNegocio(db, sesion, negocioId) {
+async function elegirNegocio(db, sesion, negocioId) {
   const existe = sesion.negocios.some(function (n) { return n.id === negocioId; });
   if (!existe) { throw new ErrorApi(403, 'No tienes acceso a ese negocio.'); }
-  db.prepare('UPDATE sesiones SET negocio_id = ? WHERE token_hash = ?').run(negocioId, sesion.tokenHash);
+  await db.query('UPDATE sesiones SET negocio_id = $1 WHERE token_hash = $2', [negocioId, sesion.tokenHash]);
 }
 
 // Crea negocio + usuario dueño en una sola transacción.
-function registrar(db, datos) {
+async function registrar(db, datos) {
   const negocio = texto(datos.negocio, 'El nombre del negocio', 2, 80);
   const nombre = texto(datos.nombre, 'Tu nombre', 2, 80);
   const correo = validarCorreo(datos.correo);
   const clave = typeof datos.clave === 'string' ? datos.clave : '';
   if (clave.length < 8 || clave.length > 200) { throw new ErrorApi(400, 'La contraseña debe tener al menos 8 caracteres.'); }
-  if (db.prepare('SELECT 1 FROM usuarios WHERE correo = ?').get(correo)) {
-    throw new ErrorApi(409, 'Ya existe una cuenta con ese correo.');
+  const yaExiste = new ErrorApi(409, 'Ya existe una cuenta con ese correo.');
+  if (await uno(db, 'SELECT 1 FROM usuarios WHERE correo = $1', [correo])) { throw yaExiste; }
+  const ahora = new Date();
+  try {
+    return await transaccion(db, async function (t) {
+      const negocioId = (await uno(t, 'INSERT INTO negocios (nombre, creado_en) VALUES ($1, $2) RETURNING id', [negocio, ahora])).id;
+      const usuarioId = (await uno(t, 'INSERT INTO usuarios (nombre, correo, clave_hash, creado_en) VALUES ($1, $2, $3, $4) RETURNING id',
+        [nombre, correo, hashClave(clave), ahora])).id;
+      await t.query('INSERT INTO membresias (usuario_id, negocio_id, rol) VALUES ($1, $2, $3)', [usuarioId, negocioId, 'dueno']);
+      return { usuarioId: usuarioId, negocioId: negocioId };
+    });
+  } catch (e) {
+    // Dos registros simultáneos con el mismo correo: la base rechaza el segundo.
+    throw esDuplicado(e) ? yaExiste : e;
   }
-  const ahora = new Date().toISOString();
-  return transaccion(db, function () {
-    const negocioId = Number(db.prepare('INSERT INTO negocios (nombre, creado_en) VALUES (?, ?)').run(negocio, ahora).lastInsertRowid);
-    const usuarioId = Number(db.prepare('INSERT INTO usuarios (nombre, correo, clave_hash, creado_en) VALUES (?, ?, ?, ?)')
-      .run(nombre, correo, hashClave(clave), ahora).lastInsertRowid);
-    db.prepare('INSERT INTO membresias (usuario_id, negocio_id, rol) VALUES (?, ?, ?)').run(usuarioId, negocioId, 'dueno');
-    return { usuarioId: usuarioId, negocioId: negocioId };
-  });
 }
 
 // Limita intentos fallidos por correo + IP para frenar ataques de fuerza bruta.
@@ -131,9 +135,9 @@ function crearLimitador() {
 }
 
 // Devuelve el id del usuario si la clave es correcta; lanza 401 si no.
-function autenticar(db, correoCrudo, clave) {
+async function autenticar(db, correoCrudo, clave) {
   const correo = typeof correoCrudo === 'string' ? correoCrudo.trim().toLowerCase() : '';
-  const usuario = db.prepare('SELECT id, clave_hash FROM usuarios WHERE correo = ?').get(correo);
+  const usuario = await uno(db, 'SELECT id, clave_hash FROM usuarios WHERE correo = $1', [correo]);
   const ok = verificarClave(typeof clave === 'string' ? clave : '', usuario ? usuario.clave_hash : HASH_FALSO);
   if (!usuario || !ok) { throw new ErrorApi(401, 'Correo o contraseña incorrectos.'); }
   return usuario.id;

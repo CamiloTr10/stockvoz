@@ -1,7 +1,7 @@
 'use strict';
 // Reglas del inventario. Todas las funciones reciben el negocio de la sesión y filtran por él:
 // un negocio nunca ve ni modifica datos de otro.
-const { transaccion } = require('./db');
+const { uno, todos, transaccion, esDuplicado } = require('./db');
 const { ErrorApi } = require('./errores');
 
 const TIPOS = ['venta', 'entrada', 'merma'];
@@ -41,73 +41,75 @@ function estadoStock(p) {
 function conEstado(p) {
   return {
     id: p.id, nombre: p.nombre, precio: p.precio, stock: p.stock,
-    stockMinimo: p.stock_minimo, activo: Boolean(p.activo), estado: estadoStock(p)
+    stockMinimo: p.stock_minimo, activo: p.activo, estado: estadoStock(p)
   };
 }
 
-function obtenerProducto(db, negocioId, id) {
-  const p = db.prepare('SELECT * FROM productos WHERE id = ? AND negocio_id = ?').get(id, negocioId);
+// Con `bloquear`, la fila queda reservada hasta el fin de la transacción: dos ventas
+// simultáneas del mismo producto se atienden una tras otra y el stock nunca queda negativo.
+async function obtenerProducto(db, negocioId, id, bloquear) {
+  const p = await uno(db, 'SELECT * FROM productos WHERE id = $1 AND negocio_id = $2' + (bloquear ? ' FOR UPDATE' : ''), [id, negocioId]);
   if (!p) { throw new ErrorApi(404, 'Ese producto no existe en este negocio.'); }
   return p;
 }
 
-function listarProductos(db, negocioId, incluirInactivos) {
-  return db.prepare('SELECT * FROM productos WHERE negocio_id = ? AND (activo = 1 OR ?) ORDER BY nombre')
-    .all(negocioId, incluirInactivos ? 1 : 0).map(conEstado);
+async function listarProductos(db, negocioId, incluirInactivos) {
+  return (await todos(db, 'SELECT * FROM productos WHERE negocio_id = $1 AND (activo OR $2) ORDER BY lower(nombre), id',
+    [negocioId, Boolean(incluirInactivos)])).map(conEstado);
 }
 
-function insertarMovimiento(db, datos) {
+async function insertarMovimiento(db, datos) {
   const ahora = datos.ahora || new Date();
-  return Number(db.prepare('INSERT INTO movimientos (negocio_id, producto_id, usuario_id, tipo, cantidad, precio_unitario, stock_resultante, origen, texto_original, fecha_local, creado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(datos.negocioId, datos.productoId, datos.usuarioId, datos.tipo, datos.cantidad, datos.precio,
-      datos.stockResultante, datos.origen, datos.texto || null, fechaLocal(ahora), ahora.toISOString()).lastInsertRowid);
+  return (await uno(db, 'INSERT INTO movimientos (negocio_id, producto_id, usuario_id, tipo, cantidad, precio_unitario, stock_resultante, origen, texto_original, fecha_local, creado_en) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id',
+    [datos.negocioId, datos.productoId, datos.usuarioId, datos.tipo, datos.cantidad, datos.precio,
+      datos.stockResultante, datos.origen, datos.texto || null, fechaLocal(ahora), ahora])).id;
 }
 
 function duplicado(e) {
-  return /UNIQUE/.test(e.message) ? new ErrorApi(409, 'Ya existe un producto con ese nombre.') : e;
+  return esDuplicado(e) ? new ErrorApi(409, 'Ya existe un producto con ese nombre.') : e;
 }
 
 // El stock inicial se registra como una entrada para que el historial cuadre con el stock.
-function crearProducto(db, negocioId, usuarioId, datos) {
+async function crearProducto(db, negocioId, usuarioId, datos) {
   const nombre = nombreProducto(datos.nombre);
   const precio = entero(datos.precio, 'El precio', 0, MAX_PRECIO);
   const stock = entero(datos.stock === undefined ? 0 : datos.stock, 'El stock inicial', 0, MAX_CANTIDAD);
   const minimo = entero(datos.stockMinimo === undefined ? 0 : datos.stockMinimo, 'El stock mínimo', 0, MAX_CANTIDAD);
   try {
-    return transaccion(db, function () {
-      const id = Number(db.prepare('INSERT INTO productos (negocio_id, nombre, precio, stock, stock_minimo) VALUES (?, ?, ?, ?, ?)')
-        .run(negocioId, nombre, precio, stock, minimo).lastInsertRowid);
+    return await transaccion(db, async function (t) {
+      const id = (await uno(t, 'INSERT INTO productos (negocio_id, nombre, precio, stock, stock_minimo) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [negocioId, nombre, precio, stock, minimo])).id;
       if (stock > 0) {
-        insertarMovimiento(db, { negocioId, productoId: id, usuarioId, tipo: 'entrada', cantidad: stock, precio, stockResultante: stock, origen: 'inicial', texto: 'Stock inicial', ahora: datos.ahora });
+        await insertarMovimiento(t, { negocioId, productoId: id, usuarioId, tipo: 'entrada', cantidad: stock, precio, stockResultante: stock, origen: 'inicial', texto: 'Stock inicial', ahora: datos.ahora });
       }
-      return conEstado(obtenerProducto(db, negocioId, id));
+      return conEstado(await obtenerProducto(t, negocioId, id));
     });
   } catch (e) { throw duplicado(e); }
 }
 
 // Edita datos descriptivos. El stock no se edita aquí: solo cambia con movimientos.
-function actualizarProducto(db, negocioId, id, datos) {
-  const p = obtenerProducto(db, negocioId, id);
+async function actualizarProducto(db, negocioId, id, datos) {
+  const p = await obtenerProducto(db, negocioId, id);
   const nombre = datos.nombre === undefined ? p.nombre : nombreProducto(datos.nombre);
   const precio = datos.precio === undefined ? p.precio : entero(datos.precio, 'El precio', 0, MAX_PRECIO);
   const minimo = datos.stockMinimo === undefined ? p.stock_minimo : entero(datos.stockMinimo, 'El stock mínimo', 0, MAX_CANTIDAD);
-  const activo = datos.activo === undefined ? p.activo : (datos.activo ? 1 : 0);
+  const activo = datos.activo === undefined ? p.activo : Boolean(datos.activo);
   try {
-    db.prepare('UPDATE productos SET nombre = ?, precio = ?, stock_minimo = ?, activo = ? WHERE id = ? AND negocio_id = ?')
-      .run(nombre, precio, minimo, activo, id, negocioId);
+    await db.query('UPDATE productos SET nombre = $1, precio = $2, stock_minimo = $3, activo = $4 WHERE id = $5 AND negocio_id = $6',
+      [nombre, precio, minimo, activo, id, negocioId]);
   } catch (e) { throw duplicado(e); }
-  return conEstado(obtenerProducto(db, negocioId, id));
+  return conEstado(await obtenerProducto(db, negocioId, id));
 }
 
-function registrarMovimiento(db, negocioId, usuarioId, datos) {
-  const productoId = entero(datos.productoId, 'El producto', 1, Number.MAX_SAFE_INTEGER);
+async function registrarMovimiento(db, negocioId, usuarioId, datos) {
+  const productoId = entero(datos.productoId, 'El producto', 1, 2147483647);
   const cantidad = entero(datos.cantidad, 'La cantidad', 1, MAX_CANTIDAD);
   if (TIPOS.indexOf(datos.tipo) === -1) { throw new ErrorApi(400, 'El tipo debe ser venta, entrada o merma.'); }
   const origen = ORIGENES.indexOf(datos.origen) === -1 ? 'manual' : datos.origen;
   const texto = typeof datos.textoOriginal === 'string' ? datos.textoOriginal.trim().slice(0, 300) : null;
 
-  return transaccion(db, function () {
-    const p = obtenerProducto(db, negocioId, productoId);
+  return transaccion(db, async function (t) {
+    const p = await obtenerProducto(t, negocioId, productoId, true);
     if (!p.activo) { throw new ErrorApi(409, p.nombre + ' está desactivado. Actívalo en Inventario para registrar movimientos.'); }
     const signo = datos.tipo === 'entrada' ? 1 : -1;
     const nuevo = p.stock + signo * cantidad;
@@ -115,8 +117,8 @@ function registrarMovimiento(db, negocioId, usuarioId, datos) {
       throw new ErrorApi(409, 'Stock insuficiente: solo quedan ' + p.stock + ' unidades de ' + p.nombre + ' y se intentó descontar ' + cantidad + '.');
     }
     if (nuevo > MAX_CANTIDAD) { throw new ErrorApi(400, 'El stock no puede superar ' + MAX_CANTIDAD.toLocaleString('es-CO') + ' unidades.'); }
-    db.prepare('UPDATE productos SET stock = ? WHERE id = ? AND negocio_id = ?').run(nuevo, p.id, negocioId);
-    const id = insertarMovimiento(db, { negocioId, productoId: p.id, usuarioId, tipo: datos.tipo, cantidad, precio: p.precio, stockResultante: nuevo, origen, texto, ahora: datos.ahora });
+    await t.query('UPDATE productos SET stock = $1 WHERE id = $2 AND negocio_id = $3', [nuevo, p.id, negocioId]);
+    const id = await insertarMovimiento(t, { negocioId, productoId: p.id, usuarioId, tipo: datos.tipo, cantidad, precio: p.precio, stockResultante: nuevo, origen, texto, ahora: datos.ahora });
     return { id: id, tipo: datos.tipo, cantidad: cantidad, stockAnterior: p.stock, producto: conEstado(Object.assign({}, p, { stock: nuevo })) };
   });
 }
@@ -124,16 +126,17 @@ function registrarMovimiento(db, negocioId, usuarioId, datos) {
 function listarMovimientos(db, negocioId, filtro) {
   const tipo = TIPOS.indexOf(filtro.tipo) === -1 ? null : filtro.tipo;
   const limite = Math.min(Math.max(Number(filtro.limite) || 100, 1), 500);
-  return db.prepare('SELECT m.id, m.tipo, m.cantidad, m.precio_unitario AS precioUnitario, m.stock_resultante AS stockResultante, m.origen, m.texto_original AS textoOriginal, m.creado_en AS creadoEn, p.nombre AS producto, u.nombre AS usuario FROM movimientos m JOIN productos p ON p.id = m.producto_id LEFT JOIN usuarios u ON u.id = m.usuario_id WHERE m.negocio_id = ? AND (? IS NULL OR m.tipo = ?) ORDER BY m.creado_en DESC, m.id DESC LIMIT ?')
-    .all(negocioId, tipo, tipo, limite);
+  return todos(db, 'SELECT m.id, m.tipo, m.cantidad, m.precio_unitario AS "precioUnitario", m.stock_resultante AS "stockResultante", m.origen, m.texto_original AS "textoOriginal", m.creado_en AS "creadoEn", p.nombre AS producto, u.nombre AS usuario FROM movimientos m JOIN productos p ON p.id = m.producto_id LEFT JOIN usuarios u ON u.id = m.usuario_id WHERE m.negocio_id = $1 AND ($2::text IS NULL OR m.tipo = $2) ORDER BY m.creado_en DESC, m.id DESC LIMIT $3',
+    [negocioId, tipo, limite]);
 }
 
-function panel(db, negocioId, ahora) {
+// Las sumas se hacen en bigint: cantidad × precio puede pasar del límite de integer (2.147 millones).
+async function panel(db, negocioId, ahora) {
   const hoy = fechaLocal(ahora);
   const desde = diasAtras(ahora, 6);
-  const productos = listarProductos(db, negocioId, false);
-  const porDia = db.prepare("SELECT fecha_local AS fecha, SUM(cantidad * precio_unitario) AS total FROM movimientos WHERE negocio_id = ? AND tipo = 'venta' AND fecha_local >= ? GROUP BY fecha_local")
-    .all(negocioId, desde);
+  const productos = await listarProductos(db, negocioId, false);
+  const porDia = await todos(db, "SELECT fecha_local AS fecha, SUM(cantidad::bigint * precio_unitario)::bigint AS total FROM movimientos WHERE negocio_id = $1 AND tipo = 'venta' AND fecha_local >= $2 GROUP BY fecha_local",
+    [negocioId, desde]);
   const ventas7 = [];
   for (let i = 6; i >= 0; i--) {
     const fecha = diasAtras(ahora, i);
@@ -146,18 +149,18 @@ function panel(db, negocioId, ahora) {
     ventasHoy: ventas7[6].total,
     alertas: productos.filter(function (p) { return p.estado !== 'ok'; }),
     ventas7: ventas7,
-    recientes: listarMovimientos(db, negocioId, { limite: 8 })
+    recientes: await listarMovimientos(db, negocioId, { limite: 8 })
   };
 }
 
-function reporte(db, negocioId, ahora, dias) {
+async function reporte(db, negocioId, ahora, dias) {
   const periodo = dias === 30 ? 30 : 7;
   const desde = diasAtras(ahora, periodo - 1);
-  const totales = db.prepare("SELECT tipo, SUM(cantidad) AS unidades, SUM(cantidad * precio_unitario) AS valor FROM movimientos WHERE negocio_id = ? AND fecha_local >= ? AND origen <> 'inicial' GROUP BY tipo")
-    .all(negocioId, desde);
+  const totales = await todos(db, "SELECT tipo, SUM(cantidad)::bigint AS unidades, SUM(cantidad::bigint * precio_unitario)::bigint AS valor FROM movimientos WHERE negocio_id = $1 AND fecha_local >= $2 AND origen <> 'inicial' GROUP BY tipo",
+    [negocioId, desde]);
   const top = function (tipo) {
-    return db.prepare('SELECT p.nombre, SUM(m.cantidad) AS unidades, SUM(m.cantidad * m.precio_unitario) AS valor FROM movimientos m JOIN productos p ON p.id = m.producto_id WHERE m.negocio_id = ? AND m.tipo = ? AND m.fecha_local >= ? GROUP BY p.id ORDER BY unidades DESC, p.nombre LIMIT 5')
-      .all(negocioId, tipo, desde);
+    return todos(db, 'SELECT p.nombre, SUM(m.cantidad)::bigint AS unidades, SUM(m.cantidad::bigint * m.precio_unitario)::bigint AS valor FROM movimientos m JOIN productos p ON p.id = m.producto_id WHERE m.negocio_id = $1 AND m.tipo = $2 AND m.fecha_local >= $3 GROUP BY p.id ORDER BY unidades DESC, lower(p.nombre) LIMIT 5',
+      [negocioId, tipo, desde]);
   };
   const de = function (tipo) {
     return totales.find(function (t) { return t.tipo === tipo; }) || { unidades: 0, valor: 0 };
@@ -165,7 +168,7 @@ function reporte(db, negocioId, ahora, dias) {
   return {
     dias: periodo, desde: desde, hasta: fechaLocal(ahora),
     vendido: de('venta'), entradas: de('entrada'), mermas: de('merma'),
-    topVendidos: top('venta'), topMermas: top('merma')
+    topVendidos: await top('venta'), topMermas: await top('merma')
   };
 }
 

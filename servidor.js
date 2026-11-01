@@ -1,9 +1,13 @@
 'use strict';
 // Servidor de StockVoz: API JSON + archivos de la interfaz (carpeta public/).
-// Uso: node servidor.js   (variables opcionales: PORT, STOCKVOZ_DB, STOCKVOZ_DEMO=0)
+// Uso: node servidor.js   (configuración en .env; ver .env.example)
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+
+// Lee .env si existe. Las variables ya definidas en el sistema tienen prioridad.
+try { process.loadEnvFile(path.join(__dirname, '.env')); } catch (e) { if (e.code !== 'ENOENT') { throw e; } }
+
 const db = require('./src/db');
 const auth = require('./src/auth');
 const inv = require('./src/inventario');
@@ -66,46 +70,46 @@ function estadoSesion(sesion) {
   return { usuario: sesion.usuario, negocios: sesion.negocios, negocio: sesion.negocio, rol: sesion.rol };
 }
 
-function crearApp(opciones) {
-  const base = db.abrir(opciones.rutaDb);
+async function crearApp(opciones) {
+  const base = await db.abrir(opciones.urlDb);
   const ahora = opciones.ahora || function () { return new Date(); };
-  if (opciones.demo !== false) { sembrarSiVacia(base, ahora()); }
+  if (opciones.demo !== false) { await sembrarSiVacia(base, ahora()); }
   // La pantalla de ingreso muestra las cuentas de prueba solo si existen.
-  const demo = opciones.demo !== false && Boolean(base.prepare("SELECT 1 FROM usuarios WHERE correo = 'demo@stockvoz.test'").get());
+  const demo = opciones.demo !== false && Boolean(await db.uno(base, "SELECT 1 FROM usuarios WHERE correo = 'demo@stockvoz.test'"));
   const limitador = auth.crearLimitador();
   const segura = Boolean(opciones.cookieSegura);
 
   // Rutas: [método, patrón, requiere ('nada' | 'sesion' | 'negocio' | 'dueno'), manejador]
   const RUTAS = [
     ['GET', /^\/api\/config$/, 'nada', function () { return { demo: demo }; }],
-    ['POST', /^\/api\/registro$/, 'nada', function (c) {
-      const r = auth.registrar(base, c.cuerpo);
-      const token = auth.crearSesion(base, r.usuarioId, r.negocioId);
+    ['POST', /^\/api\/registro$/, 'nada', async function (c) {
+      const r = await auth.registrar(base, c.cuerpo);
+      const token = await auth.crearSesion(base, r.usuarioId, r.negocioId);
       c.cookie = cookieSesion(token, segura);
       c.estado = 201;
-      return estadoSesion(auth.leerSesion(base, token));
+      return estadoSesion(await auth.leerSesion(base, token));
     }],
-    ['POST', /^\/api\/sesion$/, 'nada', function (c) {
+    ['POST', /^\/api\/sesion$/, 'nada', async function (c) {
       const clave = String(c.cuerpo.correo || '').toLowerCase() + '|' + c.ip;
       limitador.revisar(clave);
       let usuarioId;
-      try { usuarioId = auth.autenticar(base, c.cuerpo.correo, c.cuerpo.clave); }
+      try { usuarioId = await auth.autenticar(base, c.cuerpo.correo, c.cuerpo.clave); }
       catch (e) { limitador.fallo(clave); throw e; }
       limitador.exito(clave);
-      const negocios = auth.negociosDe(base, usuarioId);
-      const token = auth.crearSesion(base, usuarioId, negocios.length === 1 ? negocios[0].id : null);
+      const negocios = await auth.negociosDe(base, usuarioId);
+      const token = await auth.crearSesion(base, usuarioId, negocios.length === 1 ? negocios[0].id : null);
       c.cookie = cookieSesion(token, segura);
-      return estadoSesion(auth.leerSesion(base, token));
+      return estadoSesion(await auth.leerSesion(base, token));
     }],
     ['GET', /^\/api\/sesion$/, 'sesion', function (c) { return estadoSesion(c.sesion); }],
-    ['DELETE', /^\/api\/sesion$/, 'nada', function (c) {
-      auth.cerrarSesion(base, c.token);
+    ['DELETE', /^\/api\/sesion$/, 'nada', async function (c) {
+      await auth.cerrarSesion(base, c.token);
       c.cookie = cookieSesion(null, segura);
       return { ok: true };
     }],
-    ['POST', /^\/api\/sesion\/negocio$/, 'sesion', function (c) {
-      auth.elegirNegocio(base, c.sesion, Number(c.cuerpo.negocioId));
-      return estadoSesion(auth.leerSesion(base, c.token));
+    ['POST', /^\/api\/sesion\/negocio$/, 'sesion', async function (c) {
+      await auth.elegirNegocio(base, c.sesion, Number(c.cuerpo.negocioId));
+      return estadoSesion(await auth.leerSesion(base, c.token));
     }],
     ['GET', /^\/api\/productos$/, 'negocio', function (c) {
       return inv.listarProductos(base, c.negocioId, c.url.searchParams.get('inactivos') === '1');
@@ -117,9 +121,9 @@ function crearApp(opciones) {
     ['PATCH', /^\/api\/productos\/(\d+)$/, 'dueno', function (c) {
       return inv.actualizarProducto(base, c.negocioId, Number(c.params[1]), c.cuerpo);
     }],
-    ['POST', /^\/api\/interpretar$/, 'negocio', function (c) {
+    ['POST', /^\/api\/interpretar$/, 'negocio', async function (c) {
       const texto = typeof c.cuerpo.texto === 'string' ? c.cuerpo.texto.slice(0, 300) : '';
-      const catalogo = inv.listarProductos(base, c.negocioId, false);
+      const catalogo = await inv.listarProductos(base, c.negocioId, false);
       return interpretar(texto, catalogo);
     }],
     ['POST', /^\/api\/movimientos$/, 'negocio', function (c) {
@@ -144,7 +148,7 @@ function crearApp(opciones) {
     const c = { url: url, params: ruta[1].exec(url.pathname), token: leerCookie(req), ip: req.socket.remoteAddress, estado: 200, cookie: null };
     c.cuerpo = await leerCuerpo(req);
     if (ruta[2] !== 'nada') {
-      c.sesion = auth.leerSesion(base, c.token);
+      c.sesion = await auth.leerSesion(base, c.token);
       if (!c.sesion) { throw new ErrorApi(401, 'Tu sesión terminó. Vuelve a ingresar.'); }
       if (ruta[2] !== 'sesion') {
         if (!c.sesion.negocio) { throw new ErrorApi(409, 'Primero elige un negocio.'); }
@@ -152,7 +156,7 @@ function crearApp(opciones) {
         c.negocioId = c.sesion.negocio.id;
       }
     }
-    const datos = ruta[3](c);
+    const datos = await ruta[3](c);
     responder(res, c.estado, datos, c.cookie ? { 'Set-Cookie': c.cookie } : null);
   }
 
@@ -178,18 +182,21 @@ function crearApp(opciones) {
       responder(res, 500, { error: 'Ocurrió un error inesperado. Inténtalo de nuevo.' });
     });
   });
-  servidor.on('close', function () { base.close(); });
+  servidor.on('close', function () { base.end(); });
   return servidor;
 }
 
 if (require.main === module) {
-  const rutaDb = process.env.STOCKVOZ_DB || path.join(__dirname, 'datos', 'stockvoz.db');
-  fs.mkdirSync(path.dirname(rutaDb), { recursive: true });
   const puerto = Number(process.env.PORT) || 3000;
   // En producción (HTTPS) usar STOCKVOZ_COOKIE_SEGURA=1 para que la cookie solo viaje cifrada.
-  crearApp({ rutaDb: rutaDb, demo: process.env.STOCKVOZ_DEMO !== '0', cookieSegura: process.env.STOCKVOZ_COOKIE_SEGURA === '1' }).listen(puerto, function () {
-    console.log('StockVoz escuchando en http://localhost:' + puerto);
-  });
+  crearApp({ urlDb: process.env.DATABASE_URL, demo: process.env.STOCKVOZ_DEMO !== '0', cookieSegura: process.env.STOCKVOZ_COOKIE_SEGURA === '1' })
+    .then(function (servidor) {
+      servidor.listen(puerto, function () { console.log('StockVoz escuchando en http://localhost:' + puerto); });
+    })
+    .catch(function (e) {
+      console.error('No se pudo iniciar StockVoz: ' + e.message);
+      process.exit(1);
+    });
 }
 
 module.exports = { crearApp };
