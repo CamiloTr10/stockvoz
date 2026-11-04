@@ -930,4 +930,12 @@
     estado.sesion = r[1];
     enrutar();
   });
+
+  // Hace que la app se pueda instalar en el celular y abra sin conexión. El navegador solo lo
+  // acepta en https o en localhost; si falla, StockVoz sigue funcionando igual.
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function () {});
+    });
+  }
 })();

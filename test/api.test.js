@@ -4,6 +4,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const http = require('node:http');
+const fs = require('node:fs');
+const vm = require('node:vm');
 const { Client } = require('pg');
 const { crearApp } = require('../servidor');
 const { campoCsv } = require('../src/inventario');
@@ -638,4 +640,53 @@ test('campoCsv protege las fórmulas y los separadores', function () {
 
 test('sin sesión no se puede exportar', async function () {
   assert.strictEqual((await cliente()('GET', '/api/movimientos.csv')).estado, 401);
+});
+
+// ---------- App instalable (PWA) ----------
+
+test('el manifiesto y los iconos se sirven bien y cuadran entre sí', async function () {
+  const m = await fetch(base + '/manifest.webmanifest');
+  assert.strictEqual(m.status, 200);
+  assert.match(m.headers.get('content-type'), /application\/manifest\+json/);
+  const datos = JSON.parse(await m.text());
+  assert.strictEqual(datos.display, 'standalone');
+  assert.ok(datos.icons.some(function (i) { return i.sizes === '192x192'; }), 'hace falta un icono de 192 px para poder instalarla');
+  assert.ok(datos.icons.some(function (i) { return i.purpose === 'maskable'; }), 'hace falta un icono maskable para Android');
+
+  for (const icono of datos.icons) {
+    const r = await fetch(base + '/' + icono.src);
+    assert.strictEqual(r.status, 200, icono.src);
+    assert.strictEqual(r.headers.get('content-type'), 'image/png', icono.src);
+    const b = Buffer.from(await r.arrayBuffer());
+    assert.strictEqual(b.subarray(1, 4).toString(), 'PNG', icono.src + ' no es un PNG');
+    assert.strictEqual(b.readUInt32BE(16) + 'x' + b.readUInt32BE(20), icono.sizes, icono.src + ' no mide lo que dice el manifiesto');
+  }
+});
+
+test('el service worker no se mete con las rutas /api/', function () {
+  const origen = 'http://127.0.0.1:1234';
+  const manejadores = {};
+  const falso = {
+    addEventListener: function (n, f) { manejadores[n] = f; },
+    location: { origin: origen },
+    clients: { claim: function () {} },
+    skipWaiting: function () {}
+  };
+  vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '..', 'public', 'sw.js'), 'utf8'), {
+    self: falso, URL: URL, Promise: Promise,
+    caches: { open: function () { return Promise.resolve({ put: function () {} }); }, match: function () { return Promise.resolve(null); } },
+    fetch: function () { return Promise.resolve({ ok: false }); }
+  });
+  assert.ok(manejadores.fetch, 'el service worker debe escuchar fetch');
+
+  function intercepta(url, metodo) {
+    let si = false;
+    manejadores.fetch({ request: { method: metodo || 'GET', url: url }, respondWith: function () { si = true; } });
+    return si;
+  }
+  assert.strictEqual(intercepta(origen + '/api/productos'), false, 'guardar respuestas de la API mostraría stock viejo');
+  assert.strictEqual(intercepta(origen + '/api/movimientos.csv'), false);
+  assert.strictEqual(intercepta(origen + '/app.css'), true, 'los archivos de la interfaz sí se guardan');
+  assert.strictEqual(intercepta(origen + '/app.css', 'POST'), false, 'solo se guardan peticiones GET');
+  assert.strictEqual(intercepta('https://fonts.googleapis.com/css2?family=Archivo'), false, 'nada de otros sitios');
 });

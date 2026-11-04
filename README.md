@@ -74,8 +74,8 @@ cd stockvoz
 node --test
 ```
 
-115 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con un n8n simulado (13) y la API de punta a punta (aislamiento entre negocios,
-roles, stock insuficiente, ventas simultáneas, anulaciones, invitaciones, exportación, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
+117 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con un n8n simulado (13) y la API de punta a punta (aislamiento entre negocios,
+roles, stock insuficiente, ventas simultáneas, anulaciones, invitaciones, exportación, archivos de la app instalable, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
 Las que usan la base lo hacen sobre `DATABASE_URL_PRUEBA` y se niegan a correr si esa base no termina en `_prueba`.
 
 ## Migraciones de la base de datos
@@ -128,7 +128,8 @@ stockvoz/
 │   ├── entorno.js       Lectura del archivo .env
 │   ├── demo.js          Datos de demostración
 │   └── errores.js       Error con código HTTP
-├── public/              Interfaz: index.html, app.css, app.js (JavaScript nativo)
+├── public/              Interfaz: index.html, app.css, app.js (JavaScript nativo),
+│                       manifest.webmanifest, sw.js e iconos de la app instalable
 └── test/                Pruebas con node:test
 ```
 
@@ -184,6 +185,19 @@ Todas las rutas responden JSON. Las de inventario usan siempre el negocio de la 
 - El nombre del producto es único por negocio sin distinguir mayúsculas (índice sobre `lower(nombre)`).
 - Al registrar un movimiento, la fila del producto se bloquea (`SELECT … FOR UPDATE`) hasta guardar:
   dos ventas simultáneas se atienden una tras otra y el stock nunca queda negativo.
+
+## App instalable (PWA)
+
+StockVoz se puede instalar en el celular como una app: `public/manifest.webmanifest` y `public/sw.js`.
+El navegador solo lo permite en **https o en localhost**, así que en el celular hace falta publicarla con HTTPS.
+
+El service worker guarda **solo la interfaz** (HTML, CSS, JS e iconos) y usa primero la red: la copia
+guardada se usa únicamente si no hay conexión, así nadie se queda con una versión vieja de la app.
+**Nunca guarda respuestas de `/api/`**, porque mostrar un stock viejo sería peor que no mostrar nada.
+Al cambiar la interfaz hay que subir el número de `CACHE` en `sw.js`.
+
+Para comprobarlo: abre la app en Chrome, entra a *Herramientas de desarrollo → Application → Service Workers*
+(debe aparecer activado) y *Manifest* (sin advertencias). Con *Offline* marcado, la app debe seguir abriendo.
 
 ## Exportar a CSV
 
