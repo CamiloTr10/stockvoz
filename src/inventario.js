@@ -155,11 +155,45 @@ async function anularMovimiento(db, negocioId, usuario, id, ahora) {
   });
 }
 
-function listarMovimientos(db, negocioId, filtro) {
+// `tope` es el máximo de filas que el llamador permite: la API usa 500 y la exportación, más.
+function listarMovimientos(db, negocioId, filtro, tope) {
   const tipo = TIPOS.indexOf(filtro.tipo) === -1 ? null : filtro.tipo;
-  const limite = Math.min(Math.max(Number(filtro.limite) || 100, 1), 500);
-  return todos(db, 'SELECT m.id, m.tipo, m.cantidad, m.precio_unitario AS "precioUnitario", m.stock_resultante AS "stockResultante", m.origen, m.texto_original AS "textoOriginal", m.creado_en AS "creadoEn", m.anulado_en AS "anuladoEn", m.usuario_id AS "usuarioId", p.nombre AS producto, u.nombre AS usuario, a.nombre AS "anuladoPor" FROM movimientos m JOIN productos p ON p.id = m.producto_id LEFT JOIN usuarios u ON u.id = m.usuario_id LEFT JOIN usuarios a ON a.id = m.anulado_por WHERE m.negocio_id = $1 AND ($2::text IS NULL OR m.tipo = $2) ORDER BY m.creado_en DESC, m.id DESC LIMIT $3',
-    [negocioId, tipo, limite]);
+  const limite = Math.min(Math.max(Number(filtro.limite) || 100, 1), tope || 500);
+  const desde = /^\d{4}-\d{2}-\d{2}$/.test(filtro.desde) ? filtro.desde : null;
+  return todos(db, 'SELECT m.id, m.tipo, m.cantidad, m.precio_unitario AS "precioUnitario", m.stock_resultante AS "stockResultante", m.origen, m.texto_original AS "textoOriginal", m.creado_en AS "creadoEn", m.anulado_en AS "anuladoEn", m.usuario_id AS "usuarioId", m.fecha_local AS "fechaLocal", p.nombre AS producto, u.nombre AS usuario, a.nombre AS "anuladoPor" FROM movimientos m JOIN productos p ON p.id = m.producto_id LEFT JOIN usuarios u ON u.id = m.usuario_id LEFT JOIN usuarios a ON a.id = m.anulado_por WHERE m.negocio_id = $1 AND ($2::text IS NULL OR m.tipo = $2) AND ($4::date IS NULL OR m.fecha_local >= $4) ORDER BY m.creado_en DESC, m.id DESC LIMIT $3',
+    [negocioId, tipo, limite, desde]);
+}
+
+const MAX_FILAS_CSV = 5000;
+const HORA_CSV = new Intl.DateTimeFormat('es-CO', { timeZone: ZONA, hour: '2-digit', minute: '2-digit', hour12: false });
+
+// Un campo de CSV. Excel trata como fórmula lo que empieza por = + - @, así que se antepone
+// una comilla: si no, abrir el archivo podría ejecutar algo escrito en la frase de un movimiento.
+function campoCsv(valor) {
+  const s = valor === null || valor === undefined ? '' : String(valor);
+  // Un número suelto (−8, 1500) no es una fórmula y debe quedar como número en la hoja.
+  const esNumero = /^[+-]?\d+([.,]\d+)?$/.test(s);
+  const seguro = !esNumero && /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
+  // Solo se entrecomilla por el separador ';', comillas o saltos de línea: la coma es un
+  // carácter normal aquí, y entrecomillar "2,5" haría que Excel lo tomara como texto.
+  return /[";\n\r]/.test(seguro) ? '"' + seguro.replace(/"/g, '""') + '"' : seguro;
+}
+
+// CSV de los movimientos del negocio, pensado para abrirlo en Excel: separador ';', marca BOM
+// para que se vean las tildes y fin de línea CRLF.
+async function movimientosCsv(db, negocioId, filtro) {
+  const filas = await listarMovimientos(db, negocioId, { tipo: filtro.tipo, desde: filtro.desde, limite: MAX_FILAS_CSV }, MAX_FILAS_CSV);
+  const cabecera = ['Fecha', 'Hora', 'Producto', 'Tipo', 'Cantidad', 'Precio unitario', 'Valor', 'Stock resultante', 'Origen', 'Usuario', 'Frase original', 'Anulado'];
+  const cuerpo = filas.map(function (m) {
+    const signo = m.tipo === 'entrada' ? 1 : -1;
+    return [
+      m.fechaLocal, HORA_CSV.format(new Date(m.creadoEn)), m.producto, m.tipo, signo * m.cantidad,
+      m.precioUnitario, m.cantidad * m.precioUnitario, m.stockResultante, m.origen,
+      m.usuario || '', m.textoOriginal || '', m.anuladoEn ? 'sí' : 'no'
+    ].map(campoCsv).join(';');
+  });
+  // El BOM va primero para que Excel reconozca UTF-8 y no muestre "GaseosaÂ 1,5 L".
+  return '﻿' + [cabecera.map(campoCsv).join(';')].concat(cuerpo).join('\r\n') + '\r\n';
 }
 
 // Las sumas se hacen en bigint: cantidad × precio puede pasar del límite de integer (2.147 millones).
@@ -205,6 +239,7 @@ async function reporte(db, negocioId, ahora, dias) {
 }
 
 module.exports = {
-  fechaLocal, MAX_CANTIDAD, listarProductos, crearProducto, actualizarProducto, registrarMovimiento, anularMovimiento,
+  fechaLocal, diasAtras, MAX_CANTIDAD, listarProductos, crearProducto, actualizarProducto, registrarMovimiento, anularMovimiento,
+  movimientosCsv, campoCsv,
   listarMovimientos, panel, reporte
 };

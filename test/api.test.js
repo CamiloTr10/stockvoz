@@ -6,6 +6,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 const { Client } = require('pg');
 const { crearApp } = require('../servidor');
+const { campoCsv } = require('../src/inventario');
 
 let servidor;
 let base;
@@ -37,7 +38,11 @@ test.after(function () { servidor.close(); n8n.close(); n8n.closeAllConnections(
 // Cliente mínimo que guarda la cookie de sesión como lo haría el navegador.
 function cliente() {
   let cookie = '';
-  return async function (metodo, ruta, cuerpo, cabeceras) {
+  // Se expone la cookie para las pocas pruebas que necesitan la respuesta en bytes, no en texto.
+  enviar.cookieActual = function () { return cookie; };
+  return enviar;
+
+  async function enviar(metodo, ruta, cuerpo, cabeceras) {
     const r = await fetch(base + ruta, {
       method: metodo,
       headers: Object.assign({ cookie: cookie }, cuerpo === undefined ? {} : { 'content-type': 'application/json' }, cabeceras),
@@ -45,7 +50,9 @@ function cliente() {
     });
     const set = r.headers.get('set-cookie');
     if (set) { cookie = set.split(';')[0]; }
-    return { estado: r.status, datos: await r.json(), cabeceras: r.headers };
+    // Casi todo es JSON; la exportación devuelve texto plano (CSV).
+    const esJson = (r.headers.get('content-type') || '').indexOf('application/json') === 0;
+    return { estado: r.status, datos: esJson ? await r.json() : await r.text(), cabeceras: r.headers };
   };
 }
 
@@ -557,4 +564,78 @@ test('quien se queda sin negocio entra directo al del código que use', async fu
   assert.strictEqual(r.estado, 200, JSON.stringify(r.datos));
   assert.strictEqual(r.datos.negocio.nombre, 'Tienda invitaciones N', 'queda trabajando en el negocio nuevo');
   assert.strictEqual((await api('GET', '/api/productos')).estado, 200);
+});
+
+// ---------- Exportar a CSV ----------
+
+test('el CSV se abre bien en Excel: BOM, separador ; y cabecera', async function () {
+  const s = await ingresar('demo@stockvoz.test');
+  await elegir(s.api, s.sesion, 'Tienda');
+  const r = await s.api('GET', '/api/movimientos.csv');
+  assert.strictEqual(r.estado, 200);
+  assert.match(r.cabeceras.get('content-type'), /^text\/csv/);
+  assert.match(r.cabeceras.get('content-disposition'), /^attachment; filename="stockvoz-movimientos-\d{4}-\d{2}-\d{2}\.csv"$/);
+  // fetch quita el BOM al convertir a texto, así que se miran los bytes que verá Excel.
+  const bytes = new Uint8Array(await (await fetch(base + '/api/movimientos.csv', { headers: { cookie: s.api.cookieActual() } })).arrayBuffer());
+  assert.deepStrictEqual([bytes[0], bytes[1], bytes[2]], [0xEF, 0xBB, 0xBF], 'debe empezar con el BOM para que Excel lea las tildes');
+  const lineas = r.datos.split('\r\n');
+  assert.strictEqual(lineas[0], 'Fecha;Hora;Producto;Tipo;Cantidad;Precio unitario;Valor;Stock resultante;Origen;Usuario;Frase original;Anulado');
+  assert.ok(lineas.length > 2, 'debe traer movimientos');
+  assert.ok(r.datos.indexOf('Gaseosa 1,5 L') !== -1, 'un nombre con coma no necesita comillas con separador ;');
+});
+
+test('el CSV respeta el filtro de tipo y el periodo', async function () {
+  const s = await ingresar('demo@stockvoz.test');
+  await elegir(s.api, s.sesion, 'Tienda');
+  const ventas = (await s.api('GET', '/api/movimientos.csv?tipo=venta')).datos.trim().split('\r\n').slice(1);
+  assert.ok(ventas.length > 0);
+  ventas.forEach(function (l) { assert.strictEqual(l.split(';')[3], 'venta', l); });
+  // Un periodo de un solo día no puede traer más filas que uno de un año.
+  const hoy = (await s.api('GET', '/api/movimientos.csv?dias=1')).datos.split('\r\n').length;
+  const anio = (await s.api('GET', '/api/movimientos.csv?dias=365')).datos.split('\r\n').length;
+  assert.ok(hoy <= anio, 'el periodo debe filtrar');
+});
+
+test('el CSV solo trae los movimientos del negocio de la sesión', async function () {
+  const d = await ingresar('demo@stockvoz.test');
+  await elegir(d.api, d.sesion, 'Papelería');
+  const papeleria = (await d.api('GET', '/api/movimientos.csv?dias=365')).datos;
+  assert.ok(papeleria.indexOf('Cuaderno 100 hojas') !== -1);
+  assert.ok(papeleria.indexOf('Gaseosa') === -1, 'no deben aparecer productos de la tienda');
+
+  const e = await ingresar('encargado@stockvoz.test');   // solo pertenece a la tienda
+  const tienda = (await e.api('GET', '/api/movimientos.csv?dias=365')).datos;
+  assert.ok(tienda.indexOf('Cuaderno 100 hojas') === -1);
+  assert.ok(tienda.indexOf('Gaseosa') !== -1, 'el encargado sí puede exportar lo suyo');
+});
+
+test('una frase que parece fórmula de Excel sale neutralizada y las comillas se escapan', async function () {
+  const s = await ingresar('demo@stockvoz.test');
+  await elegir(s.api, s.sesion, 'Tienda');
+  const p = (await s.api('GET', '/api/productos')).datos[0];
+  await s.api('POST', '/api/movimientos', { productoId: p.id, tipo: 'venta', cantidad: 1, origen: 'texto', textoOriginal: '=1+1 vendí "uno"; y ya' });
+  const csv = (await s.api('GET', '/api/movimientos.csv?dias=1')).datos;
+  assert.ok(csv.indexOf('"\'=1+1 vendí ""uno""; y ya"') !== -1, 'la fórmula se desactiva y las comillas se duplican:\n' + csv.split('\r\n')[1]);
+  assert.ok(csv.indexOf(';=1+1') === -1, 'ningún campo puede empezar por = sin neutralizar');
+});
+
+test('campoCsv protege las fórmulas y los separadores', function () {
+  assert.strictEqual(campoCsv('Pan tajado'), 'Pan tajado');
+  assert.strictEqual(campoCsv('Gaseosa 1,5 L'), 'Gaseosa 1,5 L', 'con separador ; la coma no necesita comillas');
+  assert.strictEqual(campoCsv('a;b'), '"a;b"');
+  assert.strictEqual(campoCsv('dijo "hola"'), '"dijo ""hola"""');
+  assert.strictEqual(campoCsv('dos\nlíneas'), '"dos\nlíneas"');
+  assert.strictEqual(campoCsv(null), '');
+  assert.strictEqual(campoCsv(0), '0');
+  ['=A1', '+A1', '-A1', '@SUM(A1)', '-1+1', '=1+1'].forEach(function (f) {
+    assert.strictEqual(campoCsv(f).charAt(0), "'", f + ' debe empezar por comilla');
+  });
+  // Los números sí deben quedar como números en la hoja de cálculo.
+  ['-8', '8', '+3', '-1500', '2,5'].forEach(function (n) {
+    assert.strictEqual(campoCsv(n), n, n + ' debe quedar tal cual');
+  });
+});
+
+test('sin sesión no se puede exportar', async function () {
+  assert.strictEqual((await cliente()('GET', '/api/movimientos.csv')).estado, 401);
 });

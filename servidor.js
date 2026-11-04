@@ -160,6 +160,12 @@ async function crearApp(opciones) {
     ['POST', /^\/api\/movimientos\/(\d+)\/anular$/, 'negocio', function (c) {
       return inv.anularMovimiento(base, c.negocioId, { id: c.sesion.usuario.id, rol: c.sesion.rol }, Number(c.params[1]), ahora());
     }],
+    ['GET', /^\/api\/movimientos\.csv$/, 'negocio', function (c) {
+      const dias = Math.min(Math.max(Number(c.url.searchParams.get('dias')) || 30, 1), 365);
+      c.tipoContenido = 'text/csv; charset=utf-8';
+      c.extra = { 'Content-Disposition': 'attachment; filename="stockvoz-movimientos-' + inv.fechaLocal(ahora()) + '.csv"' };
+      return inv.movimientosCsv(base, c.negocioId, { tipo: c.url.searchParams.get('tipo'), desde: inv.diasAtras(ahora(), dias - 1) });
+    }],
     ['GET', /^\/api\/movimientos$/, 'negocio', function (c) {
       return inv.listarMovimientos(base, c.negocioId, { tipo: c.url.searchParams.get('tipo'), limite: c.url.searchParams.get('limite') });
     }],
@@ -187,6 +193,11 @@ async function crearApp(opciones) {
       }
     }
     const datos = await ruta[3](c);
+    // Una ruta puede responder algo que no es JSON (por ejemplo el CSV) fijando c.tipoContenido.
+    if (c.tipoContenido) {
+      res.writeHead(c.estado, Object.assign({ 'Content-Type': c.tipoContenido, 'Cache-Control': 'no-store' }, CABECERAS, c.extra || {}));
+      return res.end(datos);
+    }
     responder(res, c.estado, datos, c.cookie ? { 'Set-Cookie': c.cookie } : null);
   }
 

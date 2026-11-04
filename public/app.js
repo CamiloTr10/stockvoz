@@ -825,7 +825,15 @@
   function vistaMovimientos() {
     var tipo = parametro('tipo') || '';
     render(
-      '<h1>Movimientos</h1><p class="sub">Historial de ventas, entradas y mermas, con la frase original de cada registro.</p>' +
+      '<div class="encabezado"><div><h1>Movimientos</h1>' +
+      '<p class="sub">Historial de ventas, entradas y mermas, con la frase original de cada registro.</p></div>' +
+      '<div class="acciones"><label for="dias-csv" class="visually-hidden">Periodo a exportar</label>' +
+        '<select id="dias-csv">' +
+          '<option value="7">Últimos 7 días</option><option value="30" selected>Últimos 30 días</option>' +
+          '<option value="90">Últimos 90 días</option><option value="365">Último año</option>' +
+        '</select>' +
+        '<a class="btn btn--blanco" id="exportar-csv" href="#"><i class="material-icons" aria-hidden="true">table_view</i>Exportar CSV</a>' +
+      '</div></div>' +
       '<div class="filtros" role="group" aria-label="Filtrar por tipo">' +
         [['', 'Todos'], ['venta', 'Ventas'], ['entrada', 'Entradas'], ['merma', 'Mermas']].map(function (f) {
           return '<a class="chip' + (f[0] === tipo ? ' chip--activo' : '') + '" href="#/movimientos' + (f[0] ? '?tipo=' + f[0] : '') + '"' +
@@ -833,6 +841,15 @@
         }).join('') +
       '</div><div id="lista-mov" class="tarjeta"><p class="cargando">Cargando…</p></div>', 'Movimientos');
     var zona = document.getElementById('lista-mov');
+
+    // El CSV lo arma el servidor; el enlace solo lleva el filtro y el periodo elegidos.
+    var selDias = document.getElementById('dias-csv');
+    var enlaceCsv = document.getElementById('exportar-csv');
+    function actualizarEnlaceCsv() {
+      enlaceCsv.href = '/api/movimientos.csv?dias=' + encodeURIComponent(selDias.value) + (tipo ? '&tipo=' + encodeURIComponent(tipo) : '');
+    }
+    selDias.addEventListener('change', actualizarEnlaceCsv);
+    actualizarEnlaceCsv();
 
     function cargar() {
       api('GET', '/api/movimientos?limite=200' + (tipo ? '&tipo=' + tipo : '')).then(function (lista) {

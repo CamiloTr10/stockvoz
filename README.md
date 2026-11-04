@@ -74,8 +74,8 @@ cd stockvoz
 node --test
 ```
 
-109 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con un n8n simulado (13) y la API de punta a punta (aislamiento entre negocios,
-roles, stock insuficiente, ventas simultáneas, anulaciones, invitaciones, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
+115 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con un n8n simulado (13) y la API de punta a punta (aislamiento entre negocios,
+roles, stock insuficiente, ventas simultáneas, anulaciones, invitaciones, exportación, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
 Las que usan la base lo hacen sobre `DATABASE_URL_PRUEBA` y se niegan a correr si esa base no termina en `_prueba`.
 
 ## Migraciones de la base de datos
@@ -166,6 +166,7 @@ Todas las rutas responden JSON. Las de inventario usan siempre el negocio de la 
 | POST | `/api/movimientos` | negocio | Registrar (`productoId`, `tipo`, `cantidad`, `origen`, `textoOriginal`) |
 | POST | `/api/movimientos/:id/anular` | negocio | Anular: devuelve el stock y marca el movimiento (ver abajo) |
 | GET | `/api/movimientos` | negocio | Historial (`?tipo=venta|entrada|merma`) |
+| GET | `/api/movimientos.csv` | negocio | Descargar el historial (`?tipo=`, `?dias=` hasta 365) |
 | GET | `/api/panel` | negocio | Resumen del día y de 7 días |
 | GET | `/api/reportes` | negocio | Totales y rankings (`?dias=7|30`) |
 
@@ -183,6 +184,15 @@ Todas las rutas responden JSON. Las de inventario usan siempre el negocio de la 
 - El nombre del producto es único por negocio sin distinguir mayúsculas (índice sobre `lower(nombre)`).
 - Al registrar un movimiento, la fila del producto se bloquea (`SELECT … FOR UPDATE`) hasta guardar:
   dos ventas simultáneas se atienden una tras otra y el stock nunca queda negativo.
+
+## Exportar a CSV
+
+Desde **Movimientos** se descarga el historial del periodo elegido (hasta un año, máximo 5000 filas)
+con el filtro de tipo que esté puesto. El archivo está pensado para abrirlo en Excel:
+separador `;`, marca de UTF-8 para que se vean las tildes y fin de línea CRLF.
+
+Lo que empiece por `=`, `+`, `-` o `@` y no sea un número se escribe con una comilla delante: así
+Excel no ejecuta como fórmula lo que alguien escribió en la frase de un movimiento.
 
 ## Equipo del negocio
 
