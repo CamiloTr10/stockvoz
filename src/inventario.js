@@ -123,10 +123,42 @@ async function registrarMovimiento(db, negocioId, usuarioId, datos) {
   });
 }
 
+// Anula un movimiento: lo marca como anulado y devuelve el stock. No se borra nada, así el
+// historial y los reportes siguen cuadrando. Los totales dejan de contarlo (ver panel y reporte).
+// El dueño puede anular cualquiera; el encargado, solo los suyos del día, para que no pueda
+// borrar las ventas de días anteriores.
+async function anularMovimiento(db, negocioId, usuario, id, ahora) {
+  const movimientoId = entero(id, 'El movimiento', 1, 2147483647);
+  const hoy = fechaLocal(ahora || new Date());
+
+  return transaccion(db, async function (t) {
+    // Se bloquea la fila: dos anulaciones simultáneas del mismo movimiento no devuelven el stock dos veces.
+    const m = await uno(t, 'SELECT * FROM movimientos WHERE id = $1 AND negocio_id = $2 FOR UPDATE', [movimientoId, negocioId]);
+    if (!m) { throw new ErrorApi(404, 'Ese movimiento no existe en este negocio.'); }
+    if (m.anulado_en) { throw new ErrorApi(409, 'Ese movimiento ya estaba anulado.'); }
+    if (usuario.rol !== 'dueno') {
+      if (m.usuario_id !== usuario.id) { throw new ErrorApi(403, 'Solo puedes anular movimientos registrados por ti. Pídele al dueño que anule los demás.'); }
+      if (m.fecha_local !== hoy) { throw new ErrorApi(403, 'Solo puedes anular movimientos de hoy. Pídele al dueño que anule los de días anteriores.'); }
+    }
+
+    const p = await obtenerProducto(t, negocioId, m.producto_id, true);
+    const signo = m.tipo === 'entrada' ? -1 : 1;   // al revés que al registrarlo
+    const nuevo = p.stock + signo * m.cantidad;
+    if (nuevo < 0) {
+      throw new ErrorApi(409, 'No se puede anular: habría que quitar ' + m.cantidad + ' unidades de ' + p.nombre + ' y solo quedan ' + p.stock + '.');
+    }
+    if (nuevo > MAX_CANTIDAD) { throw new ErrorApi(409, 'No se puede anular: el stock superaría ' + MAX_CANTIDAD.toLocaleString('es-CO') + ' unidades.'); }
+
+    await t.query('UPDATE productos SET stock = $1 WHERE id = $2 AND negocio_id = $3', [nuevo, p.id, negocioId]);
+    await t.query('UPDATE movimientos SET anulado_en = $1, anulado_por = $2 WHERE id = $3', [ahora || new Date(), usuario.id, movimientoId]);
+    return { id: movimientoId, tipo: m.tipo, cantidad: m.cantidad, stockAnterior: p.stock, producto: conEstado(Object.assign({}, p, { stock: nuevo })) };
+  });
+}
+
 function listarMovimientos(db, negocioId, filtro) {
   const tipo = TIPOS.indexOf(filtro.tipo) === -1 ? null : filtro.tipo;
   const limite = Math.min(Math.max(Number(filtro.limite) || 100, 1), 500);
-  return todos(db, 'SELECT m.id, m.tipo, m.cantidad, m.precio_unitario AS "precioUnitario", m.stock_resultante AS "stockResultante", m.origen, m.texto_original AS "textoOriginal", m.creado_en AS "creadoEn", p.nombre AS producto, u.nombre AS usuario FROM movimientos m JOIN productos p ON p.id = m.producto_id LEFT JOIN usuarios u ON u.id = m.usuario_id WHERE m.negocio_id = $1 AND ($2::text IS NULL OR m.tipo = $2) ORDER BY m.creado_en DESC, m.id DESC LIMIT $3',
+  return todos(db, 'SELECT m.id, m.tipo, m.cantidad, m.precio_unitario AS "precioUnitario", m.stock_resultante AS "stockResultante", m.origen, m.texto_original AS "textoOriginal", m.creado_en AS "creadoEn", m.anulado_en AS "anuladoEn", m.usuario_id AS "usuarioId", p.nombre AS producto, u.nombre AS usuario, a.nombre AS "anuladoPor" FROM movimientos m JOIN productos p ON p.id = m.producto_id LEFT JOIN usuarios u ON u.id = m.usuario_id LEFT JOIN usuarios a ON a.id = m.anulado_por WHERE m.negocio_id = $1 AND ($2::text IS NULL OR m.tipo = $2) ORDER BY m.creado_en DESC, m.id DESC LIMIT $3',
     [negocioId, tipo, limite]);
 }
 
@@ -135,7 +167,7 @@ async function panel(db, negocioId, ahora) {
   const hoy = fechaLocal(ahora);
   const desde = diasAtras(ahora, 6);
   const productos = await listarProductos(db, negocioId, false);
-  const porDia = await todos(db, "SELECT fecha_local AS fecha, SUM(cantidad::bigint * precio_unitario)::bigint AS total FROM movimientos WHERE negocio_id = $1 AND tipo = 'venta' AND fecha_local >= $2 GROUP BY fecha_local",
+  const porDia = await todos(db, "SELECT fecha_local AS fecha, SUM(cantidad::bigint * precio_unitario)::bigint AS total FROM movimientos WHERE negocio_id = $1 AND tipo = 'venta' AND fecha_local >= $2 AND anulado_en IS NULL GROUP BY fecha_local",
     [negocioId, desde]);
   const ventas7 = [];
   for (let i = 6; i >= 0; i--) {
@@ -156,10 +188,10 @@ async function panel(db, negocioId, ahora) {
 async function reporte(db, negocioId, ahora, dias) {
   const periodo = dias === 30 ? 30 : 7;
   const desde = diasAtras(ahora, periodo - 1);
-  const totales = await todos(db, "SELECT tipo, SUM(cantidad)::bigint AS unidades, SUM(cantidad::bigint * precio_unitario)::bigint AS valor FROM movimientos WHERE negocio_id = $1 AND fecha_local >= $2 AND origen <> 'inicial' GROUP BY tipo",
+  const totales = await todos(db, "SELECT tipo, SUM(cantidad)::bigint AS unidades, SUM(cantidad::bigint * precio_unitario)::bigint AS valor FROM movimientos WHERE negocio_id = $1 AND fecha_local >= $2 AND origen <> 'inicial' AND anulado_en IS NULL GROUP BY tipo",
     [negocioId, desde]);
   const top = function (tipo) {
-    return todos(db, 'SELECT p.nombre, SUM(m.cantidad)::bigint AS unidades, SUM(m.cantidad::bigint * m.precio_unitario)::bigint AS valor FROM movimientos m JOIN productos p ON p.id = m.producto_id WHERE m.negocio_id = $1 AND m.tipo = $2 AND m.fecha_local >= $3 GROUP BY p.id ORDER BY unidades DESC, lower(p.nombre) LIMIT 5',
+    return todos(db, 'SELECT p.nombre, SUM(m.cantidad)::bigint AS unidades, SUM(m.cantidad::bigint * m.precio_unitario)::bigint AS valor FROM movimientos m JOIN productos p ON p.id = m.producto_id WHERE m.negocio_id = $1 AND m.tipo = $2 AND m.fecha_local >= $3 AND m.anulado_en IS NULL GROUP BY p.id ORDER BY unidades DESC, lower(p.nombre) LIMIT 5',
       [negocioId, tipo, desde]);
   };
   const de = function (tipo) {
@@ -173,6 +205,6 @@ async function reporte(db, negocioId, ahora, dias) {
 }
 
 module.exports = {
-  fechaLocal, MAX_CANTIDAD, listarProductos, crearProducto, actualizarProducto, registrarMovimiento,
+  fechaLocal, MAX_CANTIDAD, listarProductos, crearProducto, actualizarProducto, registrarMovimiento, anularMovimiento,
   listarMovimientos, panel, reporte
 };

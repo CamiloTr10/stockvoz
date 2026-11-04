@@ -129,6 +129,9 @@ async function crearApp(opciones) {
       c.estado = 201;
       return inv.registrarMovimiento(base, c.negocioId, c.sesion.usuario.id, Object.assign({}, c.cuerpo, { ahora: ahora() }));
     }],
+    ['POST', /^\/api\/movimientos\/(\d+)\/anular$/, 'negocio', function (c) {
+      return inv.anularMovimiento(base, c.negocioId, { id: c.sesion.usuario.id, rol: c.sesion.rol }, Number(c.params[1]), ahora());
+    }],
     ['GET', /^\/api\/movimientos$/, 'negocio', function (c) {
       return inv.listarMovimientos(base, c.negocioId, { tipo: c.url.searchParams.get('tipo'), limite: c.url.searchParams.get('limite') });
     }],

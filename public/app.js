@@ -9,6 +9,8 @@
   var pesos = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 });
   var fechaHora = new Intl.DateTimeFormat('es-CO', { timeZone: 'America/Bogota', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
   var diaCorto = new Intl.DateTimeFormat('es-CO', { timeZone: 'UTC', weekday: 'short', day: 'numeric' });
+  // Fecha del calendario en Colombia ("2026-11-04"), igual que fechaLocal() en el servidor.
+  var fechaCalendario = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' });
 
   var TIPOS = { venta: 'Venta', entrada: 'Entrada', merma: 'Merma' };
   var ESTADOS = { ok: 'OK', bajo: 'Bajo', agotado: 'Agotado' };
@@ -50,6 +52,35 @@
       });
     }, function () {
       throw new Error('No hay conexión con el servidor. Revisa que StockVoz esté corriendo.');
+    });
+  }
+
+  // Pregunta antes de una acción que no se puede deshacer. Devuelve una promesa con true o false.
+  // Se resuelve desde los propios botones y desde 'cancel' (tecla Escape): hay navegadores que no
+  // disparan 'close' al cerrar el diálogo, así que depender de ese evento deja la acción colgada.
+  function confirmar(titulo, texto, textoSi) {
+    var dialogo = document.getElementById('dlg-confirmar');
+    var si = document.getElementById('confirmar-si');
+    var no = document.getElementById('confirmar-no');
+    var origenFoco = document.activeElement;
+    document.getElementById('confirmar-titulo').textContent = titulo;
+    document.getElementById('confirmar-texto').textContent = texto;
+    si.textContent = textoSi || 'Confirmar';
+    dialogo.showModal();
+    return new Promise(function (resolver) {
+      function terminar(ok) {
+        si.removeEventListener('click', alSi);
+        no.removeEventListener('click', alNo);
+        dialogo.removeEventListener('cancel', alNo);
+        if (dialogo.open) { dialogo.close(); }
+        if (origenFoco && origenFoco.focus) { origenFoco.focus(); }
+        resolver(ok);
+      }
+      function alSi() { terminar(true); }
+      function alNo() { terminar(false); }
+      si.addEventListener('click', alSi);
+      no.addEventListener('click', alNo);
+      dialogo.addEventListener('cancel', alNo);
     });
   }
 
@@ -283,21 +314,36 @@
     }).catch(function (e) { render('<h1>Inicio</h1><p class="error">' + esc(e.message) + '</p>', 'Inicio'); });
   }
 
+  // El dueño puede anular cualquier movimiento; el encargado, solo los suyos de hoy.
+  // El servidor vuelve a comprobarlo: esto solo decide si se dibuja el botón.
+  function puedeAnular(m) {
+    if (m.anuladoEn || !estado.sesion) { return false; }
+    if (estado.sesion.rol === 'dueno') { return true; }
+    return m.usuarioId === estado.sesion.usuario.id &&
+      fechaCalendario.format(new Date(m.creadoEn)) === fechaCalendario.format(new Date());
+  }
+
   function tablaMovimientos(lista, compacta) {
     if (!lista.length) { return '<p class="vacio">Aún no hay movimientos.</p>'; }
     return '<div class="tabla-envoltura"><table class="tabla"><thead><tr><th scope="col">Fecha</th><th scope="col">Producto</th><th scope="col">Tipo</th>' +
       '<th scope="col" class="num">Cantidad</th><th scope="col" class="num">Stock</th>' +
-      (compacta ? '' : '<th scope="col">Origen</th><th scope="col">Usuario</th><th scope="col">Frase original</th>') +
+      (compacta ? '' : '<th scope="col">Origen</th><th scope="col">Usuario</th><th scope="col">Frase original</th><th scope="col"><span class="visually-hidden">Acciones</span></th>') +
       '</tr></thead><tbody>' +
       lista.map(function (m) {
-        return '<tr><td data-etiqueta="Fecha">' + esc(fechaHora.format(new Date(m.creadoEn))) + '</td>' +
+        return '<tr' + (m.anuladoEn ? ' class="mov--anulado"' : '') + '><td data-etiqueta="Fecha">' + esc(fechaHora.format(new Date(m.creadoEn))) + '</td>' +
           '<td data-etiqueta="Producto">' + esc(m.producto) + '</td>' +
-          '<td data-etiqueta="Tipo">' + badgeTipo(m.tipo) + '</td>' +
+          '<td data-etiqueta="Tipo">' + badgeTipo(m.tipo) + (m.anuladoEn ? ' <span class="pill pill--anulado">Anulado</span>' : '') + '</td>' +
           '<td data-etiqueta="Cantidad" class="num">' + (m.tipo === 'entrada' ? '+' : '−') + m.cantidad + '</td>' +
           '<td data-etiqueta="Stock" class="num">' + m.stockResultante + '</td>' +
           (compacta ? '' : '<td data-etiqueta="Origen">' + esc(ORIGENES[m.origen] || m.origen) + '</td>' +
             '<td data-etiqueta="Usuario">' + esc(m.usuario) + '</td>' +
-            '<td data-etiqueta="Frase" class="frase">' + (m.textoOriginal ? '«' + esc(m.textoOriginal) + '»' : '—') + '</td>') +
+            '<td data-etiqueta="Frase" class="frase">' + (m.textoOriginal ? '«' + esc(m.textoOriginal) + '»' : '—') + '</td>' +
+            '<td class="acciones-fila">' + (m.anuladoEn
+              ? '<small class="nota-anulado">Anulado' + (m.anuladoPor ? ' por ' + esc(m.anuladoPor) : '') + '</small>'
+              : (puedeAnular(m)
+                ? '<button type="button" class="enlace enlace--peligro" data-anular="' + m.id + '">Anular<span class="visually-hidden"> ' +
+                  esc((TIPOS[m.tipo] || m.tipo) + ' de ' + m.cantidad + ' ' + m.producto) + '</span></button>'
+                : '')) + '</td>') +
           '</tr>';
       }).join('') + '</tbody></table></div>';
   }
@@ -628,9 +674,38 @@
             (f[0] === tipo ? ' aria-current="true"' : '') + '>' + f[1] + '</a>';
         }).join('') +
       '</div><div id="lista-mov" class="tarjeta"><p class="cargando">Cargando…</p></div>', 'Movimientos');
-    api('GET', '/api/movimientos?limite=200' + (tipo ? '&tipo=' + tipo : '')).then(function (lista) {
-      document.getElementById('lista-mov').innerHTML = tablaMovimientos(lista, false);
-    }).catch(function (e) { errorEn(document.getElementById('lista-mov'), e.message); });
+    var zona = document.getElementById('lista-mov');
+
+    function cargar() {
+      api('GET', '/api/movimientos?limite=200' + (tipo ? '&tipo=' + tipo : '')).then(function (lista) {
+        zona.innerHTML = tablaMovimientos(lista, false);
+        zona.querySelectorAll('[data-anular]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            var id = Number(b.getAttribute('data-anular'));
+            anular(lista.find(function (m) { return m.id === id; }), b);
+          });
+        });
+      }).catch(function (e) { errorEn(zona, e.message); });
+    }
+
+    function anular(m, boton) {
+      var efecto = m.tipo === 'entrada'
+        ? 'Se quitarán ' + m.cantidad + ' unidades del stock'
+        : 'Se devolverán ' + m.cantidad + ' unidades al stock';
+      confirmar('¿Anular este movimiento?',
+        (TIPOS[m.tipo] || m.tipo) + ' de ' + m.cantidad + ' · ' + m.producto + '. ' + efecto +
+        '. El movimiento no se borra: queda en el historial marcado como anulado y deja de contar en los reportes.',
+        'Sí, anular').then(function (ok) {
+          if (!ok) { return; }
+          boton.disabled = true;
+          api('POST', '/api/movimientos/' + m.id + '/anular', {}).then(function (r) {
+            avisar('Movimiento anulado. ' + r.producto.nombre + ' queda con ' + r.producto.stock + ' unidades.');
+            cargar();
+          }).catch(function (e) { boton.disabled = false; avisar(e.message, true); });
+        });
+    }
+
+    cargar();
   }
 
   /* ---------- Reportes ---------- */

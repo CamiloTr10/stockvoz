@@ -74,8 +74,8 @@ cd stockvoz
 node --test
 ```
 
-87 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con un n8n simulado (13) y la API de punta a punta (aislamiento entre negocios,
-roles, stock insuficiente, ventas simultáneas, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
+95 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con un n8n simulado (13) y la API de punta a punta (aislamiento entre negocios,
+roles, stock insuficiente, ventas simultáneas, anulaciones, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
 Las que usan la base lo hacen sobre `DATABASE_URL_PRUEBA` y se niegan a correr si esa base no termina en `_prueba`.
 
 ## Migraciones de la base de datos
@@ -159,6 +159,7 @@ Todas las rutas responden JSON. Las de inventario usan siempre el negocio de la 
 | PATCH | `/api/productos/:id` | dueño | Editar nombre, precio, mínimo o `activo` |
 | POST | `/api/interpretar` | negocio | `texto` → propuesta |
 | POST | `/api/movimientos` | negocio | Registrar (`productoId`, `tipo`, `cantidad`, `origen`, `textoOriginal`) |
+| POST | `/api/movimientos/:id/anular` | negocio | Anular: devuelve el stock y marca el movimiento (ver abajo) |
 | GET | `/api/movimientos` | negocio | Historial (`?tipo=venta|entrada|merma`) |
 | GET | `/api/panel` | negocio | Resumen del día y de 7 días |
 | GET | `/api/reportes` | negocio | Totales y rankings (`?dias=7|30`) |
@@ -170,6 +171,10 @@ Todas las rutas responden JSON. Las de inventario usan siempre el negocio de la 
 - **movimientos**: venta, entrada o merma, con el precio del momento, el stock resultante, quién lo hizo,
   si vino por voz o texto y la frase original. **El stock solo cambia mediante movimientos**, así el historial siempre cuadra.
 - Los productos no se borran: se desactivan, para no romper el historial ni los reportes.
+- **Los movimientos tampoco se borran: se anulan.** Anular devuelve el stock, marca el movimiento con
+  `anulado_en` y `anulado_por`, y lo saca de los totales del panel y de los reportes; en el historial sigue visible, marcado.
+  El dueño puede anular cualquier movimiento; el encargado, solo los registrados por él y del mismo día,
+  para que no pueda borrar las ventas de días anteriores.
 - El nombre del producto es único por negocio sin distinguir mayúsculas (índice sobre `lower(nombre)`).
 - Al registrar un movimiento, la fila del producto se bloquea (`SELECT … FOR UPDATE`) hasta guardar:
   dos ventas simultáneas se atienden una tras otra y el stock nunca queda negativo.

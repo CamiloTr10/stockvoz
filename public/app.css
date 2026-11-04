@@ -288,3 +288,10 @@ dialog::backdrop { background: rgba(13, 18, 51, .55); }
   body { background: #fff; }
   .tarjeta, .kpi { box-shadow: none; break-inside: avoid; }
 }
+
+/* Movimientos anulados: quedan en el historial, pero visiblemente apagados. */
+.pill--anulado { background: var(--ink); color: var(--paper); }
+.mov--anulado td { opacity: .62; }
+.mov--anulado td[data-etiqueta="Cantidad"] { text-decoration: line-through; }
+.nota-anulado { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.enlace--peligro { color: var(--danger); }

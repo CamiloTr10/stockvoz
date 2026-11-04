@@ -268,3 +268,121 @@ test('si n8n falla, interpretar sigue funcionando con las reglas', async functio
   assert.strictEqual(r.estado, 200);
   assert.deepStrictEqual([r.datos.fuente, r.datos.motivoRespaldo, r.datos.estado], ['reglas', 'http', 'ok']);
 });
+
+// ---------- Anular movimientos ----------
+
+// Registra una venta con la sesión dada y devuelve el id del movimiento y el stock previo.
+async function venderParaAnular(s, nombreProducto, cantidad) {
+  const p = (await s.api('GET', '/api/productos')).datos.find(function (x) { return x.nombre === nombreProducto; });
+  const r = await s.api('POST', '/api/movimientos', { productoId: p.id, tipo: 'venta', cantidad: cantidad, origen: 'texto', textoOriginal: 'venta de prueba' });
+  assert.strictEqual(r.estado, 201, JSON.stringify(r.datos));
+  return { movimientoId: r.datos.id, productoId: p.id, stockAntes: p.stock };
+}
+
+test('el dueño anula una venta: el stock vuelve y el movimiento queda marcado', async function () {
+  const s = await ingresar('demo@stockvoz.test');
+  await elegir(s.api, s.sesion, 'Tienda');
+  const v = await venderParaAnular(s, 'Leche 1 L', 3);
+
+  const r = await s.api('POST', '/api/movimientos/' + v.movimientoId + '/anular', {});
+  assert.strictEqual(r.estado, 200, JSON.stringify(r.datos));
+  assert.strictEqual(r.datos.producto.stock, v.stockAntes);
+
+  const despues = (await s.api('GET', '/api/productos')).datos.find(function (x) { return x.id === v.productoId; });
+  assert.strictEqual(despues.stock, v.stockAntes, 'el stock debe volver a como estaba');
+
+  const mov = (await s.api('GET', '/api/movimientos?limite=200')).datos.find(function (m) { return m.id === v.movimientoId; });
+  assert.ok(mov, 'el movimiento anulado sigue en el historial');
+  assert.ok(mov.anuladoEn, 'debe quedar marcado como anulado');
+  assert.strictEqual(mov.anuladoPor, 'Usuaria demo');
+});
+
+test('un movimiento anulado no se puede anular otra vez', async function () {
+  const s = await ingresar('demo@stockvoz.test');
+  await elegir(s.api, s.sesion, 'Tienda');
+  const v = await venderParaAnular(s, 'Café 500 g', 2);
+  assert.strictEqual((await s.api('POST', '/api/movimientos/' + v.movimientoId + '/anular', {})).estado, 200);
+  const segunda = await s.api('POST', '/api/movimientos/' + v.movimientoId + '/anular', {});
+  assert.strictEqual(segunda.estado, 409);
+  assert.match(segunda.datos.error, /ya estaba anulado/);
+});
+
+test('anular quita el movimiento de los totales del panel y de los reportes', async function () {
+  const s = await ingresar('demo@stockvoz.test');
+  await elegir(s.api, s.sesion, 'Tienda');
+  const antesPanel = (await s.api('GET', '/api/panel')).datos.ventasHoy;
+  const antesRep = (await s.api('GET', '/api/reportes?dias=7')).datos.vendido;
+
+  const p = (await s.api('GET', '/api/productos')).datos.find(function (x) { return x.nombre === 'Arroz 500 g'; });
+  const r = await s.api('POST', '/api/movimientos', { productoId: p.id, tipo: 'venta', cantidad: 4 });
+  assert.strictEqual((await s.api('GET', '/api/panel')).datos.ventasHoy, antesPanel + 4 * p.precio);
+
+  assert.strictEqual((await s.api('POST', '/api/movimientos/' + r.datos.id + '/anular', {})).estado, 200);
+  assert.strictEqual((await s.api('GET', '/api/panel')).datos.ventasHoy, antesPanel, 'el panel no debe contar la venta anulada');
+  const despuesRep = (await s.api('GET', '/api/reportes?dias=7')).datos.vendido;
+  assert.deepStrictEqual([despuesRep.unidades, despuesRep.valor], [antesRep.unidades, antesRep.valor], 'los reportes tampoco');
+});
+
+test('el encargado anula lo suyo de hoy, pero no lo de otra persona', async function () {
+  const e = await ingresar('encargado@stockvoz.test');
+  const suyo = await venderParaAnular(e, 'Huevos (u)', 2);
+  assert.strictEqual((await e.api('POST', '/api/movimientos/' + suyo.movimientoId + '/anular', {})).estado, 200);
+
+  const d = await ingresar('demo@stockvoz.test');
+  await elegir(d.api, d.sesion, 'Tienda');
+  const ajeno = await venderParaAnular(d, 'Huevos (u)', 2);
+  const r = await e.api('POST', '/api/movimientos/' + ajeno.movimientoId + '/anular', {});
+  assert.strictEqual(r.estado, 403);
+  assert.match(r.datos.error, /registrados por ti/);
+});
+
+test('el encargado no puede anular movimientos de días anteriores', async function () {
+  const e = await ingresar('encargado@stockvoz.test');
+  const v = await venderParaAnular(e, 'Pan tajado', 1);
+  // Se retrasa un día la fecha del movimiento para simular que fue de ayer.
+  const c = new Client({ connectionString: process.env.DATABASE_URL_PRUEBA });
+  await c.connect();
+  await c.query('UPDATE movimientos SET fecha_local = fecha_local - 1 WHERE id = $1', [v.movimientoId]);
+  await c.end();
+
+  const r = await e.api('POST', '/api/movimientos/' + v.movimientoId + '/anular', {});
+  assert.strictEqual(r.estado, 403);
+  assert.match(r.datos.error, /de hoy/);
+  const d = await ingresar('demo@stockvoz.test');
+  await elegir(d.api, d.sesion, 'Tienda');
+  assert.strictEqual((await d.api('POST', '/api/movimientos/' + v.movimientoId + '/anular', {})).estado, 200, 'el dueño sí puede');
+});
+
+test('no se puede anular un movimiento de otro negocio', async function () {
+  const d = await ingresar('demo@stockvoz.test');
+  await elegir(d.api, d.sesion, 'Papelería');
+  const ajeno = await venderParaAnular(d, 'Lápiz HB', 1);
+
+  const e = await ingresar('encargado@stockvoz.test');   // solo pertenece a la tienda
+  assert.strictEqual((await e.api('POST', '/api/movimientos/' + ajeno.movimientoId + '/anular', {})).estado, 404);
+});
+
+test('no se puede anular una entrada cuyas unidades ya se vendieron', async function () {
+  const s = await ingresar('demo@stockvoz.test');
+  await elegir(s.api, s.sesion, 'Tienda');
+  const p = (await s.api('POST', '/api/productos', { nombre: 'Panela en bloque', precio: 3000, stock: 0 })).datos;
+  const entrada = await s.api('POST', '/api/movimientos', { productoId: p.id, tipo: 'entrada', cantidad: 10 });
+  await s.api('POST', '/api/movimientos', { productoId: p.id, tipo: 'venta', cantidad: 8 });
+
+  const r = await s.api('POST', '/api/movimientos/' + entrada.datos.id + '/anular', {});
+  assert.strictEqual(r.estado, 409);
+  assert.match(r.datos.error, /solo quedan 2/);
+  const despues = (await s.api('GET', '/api/productos')).datos.find(function (x) { return x.id === p.id; });
+  assert.strictEqual(despues.stock, 2, 'el stock no cambia si la anulación falla');
+});
+
+test('dos anulaciones simultáneas del mismo movimiento devuelven el stock una sola vez', async function () {
+  const s = await ingresar('demo@stockvoz.test');
+  await elegir(s.api, s.sesion, 'Tienda');
+  const v = await venderParaAnular(s, 'Aceite 1 L', 3);
+
+  const r = await Promise.all([1, 2, 3].map(function () { return s.api('POST', '/api/movimientos/' + v.movimientoId + '/anular', {}); }));
+  assert.deepStrictEqual(r.map(function (x) { return x.estado; }).sort(), [200, 409, 409]);
+  const despues = (await s.api('GET', '/api/productos')).datos.find(function (x) { return x.id === v.productoId; });
+  assert.strictEqual(despues.stock, v.stockAntes, 'el stock se devolvió una sola vez');
+});
