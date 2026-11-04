@@ -59,6 +59,10 @@ El servidor lee `.env` al arrancar; si una variable ya existe en el sistema, esa
 | `DATABASE_URL_PRUEBA` | — (para `node --test`) | Base que las pruebas **borran** en cada corrida; su nombre debe terminar en `_prueba` |
 | `STOCKVOZ_DEMO` | `1` | `0` para no cargar las cuentas y negocios de demostración |
 | `STOCKVOZ_COOKIE_SEGURA` | `0` | `1` para que la cookie de sesión solo viaje por HTTPS (obligatorio al publicar) |
+| `STOCKVOZ_IA` | `0` | `1` para interpretar con IA vía n8n, con las reglas como respaldo (ver abajo) |
+| `N8N_URL`, `N8N_SECRETO` | — | Webhook de n8n y secreto compartido (mínimo 16 caracteres). Obligatorias si `STOCKVOZ_IA=1` |
+| `N8N_TIMEOUT_MS` | `6000` | Milisegundos que se espera a n8n antes de usar el respaldo |
+| `STOCKVOZ_IA_LIMITE_DIARIO` | `500` | Interpretaciones con IA por negocio y día; pasado el tope se usan las reglas |
 
 **Dictado por voz:** funciona en Chrome y Edge (Web Speech API). El navegador envía el audio a su
 servicio de reconocimiento y StockVoz solo recibe el texto. En otros navegadores se usa el campo de texto.
@@ -70,7 +74,7 @@ cd stockvoz
 node --test
 ```
 
-44 pruebas: el intérprete de frases (21 casos), las migraciones (4) y la API de punta a punta (aislamiento entre negocios,
+87 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con un n8n simulado (13) y la API de punta a punta (aislamiento entre negocios,
 roles, stock insuficiente, ventas simultáneas, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
 Las que usan la base lo hacen sobre `DATABASE_URL_PRUEBA` y se niegan a correr si esa base no termina en `_prueba`.
 
@@ -86,15 +90,38 @@ Al arrancar, la aplicación aplica en orden las que faltan y deja registro en la
 En GitHub corren solas en cada push y pull request (GitHub Actions, `.github/workflows/pruebas.yml`),
 contra un PostgreSQL 17 temporal. El resultado aparece en la pestaña **Actions** del repositorio.
 
+## Interpretación con IA y evaluación
+
+Por defecto cada frase la interpreta `src/interprete.js` (reglas, gratis y sin conexión). Con `STOCKVOZ_IA=1`,
+`POST /api/interpretar` se la pasa a un flujo de n8n que consulta un modelo de lenguaje:
+
+- **La IA solo propone.** El backend valida la respuesta: solo acepta productos del catálogo del propio negocio, cantidades válidas y campos coherentes con el estado. Después el usuario confirma y `POST /api/movimientos` guarda, igual que siempre.
+- **Respaldo:** si n8n está caído, tarda más de `N8N_TIMEOUT_MS`, responde un error o algo inválido, o el negocio ya llegó a su límite diario, se usan las reglas y la interfaz sigue funcionando. La respuesta indica `fuente` (`ia` o `reglas`) y, si hubo respaldo, `motivoRespaldo`.
+- **Privacidad:** a n8n solo viajan la frase y los `id` y nombres de los productos del negocio. Sin precios, stock ni datos de personas.
+- El formato exacto que debe recibir y devolver el flujo está en [docs/contrato-n8n.md](docs/contrato-n8n.md).
+
+**Medir un intérprete.** `evaluacion/casos.json` es el banco de frases con su resultado esperado, agrupadas por categoría
+(coloquial, números en letras, errores de dictado…). Son frases propuestas: hay que reemplazarlas y ampliarlas con frases reales de tenderos.
+
+```bash
+npm run evaluar            # intérprete por reglas (gratis)
+npm run evaluar -- --ia    # la IA vía n8n, según .env (gasta crédito de la API)
+```
+
+Muestra aciertos por categoría, tiempo por frase (mediana y p95), cuántas respondió la IA y cuántas cayeron al respaldo
+(esas **no** cuentan como acierto de la IA) y la lista de fallos. Las frases marcadas `"regresion": true` también las vigila `node --test`.
+
 ## Estructura
 
 ```
 stockvoz/
-├── docs/              Documentación del proyecto (wireframes v1)
+├── docs/              Documentación del proyecto (wireframes v1) y contrato con n8n
+├── evaluacion/          Banco de frases (casos.json) y script npm run evaluar
 ├── servidor.js          Servidor HTTP: rutas de la API, sesión por cookie y archivos de public/
 ├── migraciones/         Cambios del esquema de PostgreSQL, numerados (001_..., 002_...)
 ├── src/
-│   ├── interprete.js    Frase en español → operación propuesta (tipo, producto, cantidad)
+│   ├── interprete.js    Frase en español → operación propuesta (tipo, producto, cantidad), por reglas
+│   ├── ia.js            Interpretación con IA vía n8n: validación de la respuesta y respaldo por reglas
 │   ├── inventario.js    Reglas del inventario: productos, movimientos, panel y reportes
 │   ├── auth.js          Cuentas, contraseñas (scrypt), sesiones y límite de intentos
 │   ├── db.js            Pool de PostgreSQL, migraciones y transacciones
@@ -151,7 +178,7 @@ Todas las rutas responden JSON. Las de inventario usan siempre el negocio de la 
 
 | Hoy | Por qué | Siguiente paso |
 |---|---|---|
-| Intérprete por reglas | Funciona sin claves de API ni costos y es fácil de probar | Conectar el modelo de IA mediante **n8n**, devolviendo el mismo formato que `interpretar()` |
+| Intérprete por reglas como respaldo, y la IA vía n8n opcional (`STOCKVOZ_IA=1`) | Funciona sin claves de API ni costos y es fácil de probar | Armar el flujo de n8n según [docs/contrato-n8n.md](docs/contrato-n8n.md) y elegir el modelo con `npm run evaluar -- --ia` |
 | Web Speech API del navegador | Dictado gratis en Chrome/Edge | Procesar audio en el servidor (por ejemplo Whisper) si se necesita en otros navegadores o en WhatsApp |
 | Una operación por frase | Suficiente para el MVP | Frases compuestas («vendí 3 y se dañaron 2») |
 

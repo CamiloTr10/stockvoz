@@ -173,6 +173,6 @@ async function reporte(db, negocioId, ahora, dias) {
 }
 
 module.exports = {
-  fechaLocal, listarProductos, crearProducto, actualizarProducto, registrarMovimiento,
+  fechaLocal, MAX_CANTIDAD, listarProductos, crearProducto, actualizarProducto, registrarMovimiento,
   listarMovimientos, panel, reporte
 };

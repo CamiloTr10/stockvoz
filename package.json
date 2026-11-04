@@ -6,7 +6,8 @@
   "main": "servidor.js",
   "scripts": {
     "start": "node servidor.js",
-    "test": "node --test"
+    "test": "node --test",
+    "evaluar": "node evaluacion/evaluar.js"
   },
   "engines": {
     "node": ">=22.13"

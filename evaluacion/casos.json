@@ -1,0 +1,77 @@
+{
+  "nota": "Frases propuestas para medir intérpretes (reglas o IA). Reemplazar y ampliar con frases reales de tenderos. 'regresion': true marca los casos que el intérprete por reglas ya acierta y que node --test vigila; los demás solo los mide npm run evaluar.",
+  "catalogo": [
+    { "id": 1, "nombre": "Gaseosa 1,5 L" },
+    { "id": 2, "nombre": "Gaseosa 400 ml" },
+    { "id": 3, "nombre": "Pan tajado" },
+    { "id": 4, "nombre": "Huevos (u)" },
+    { "id": 5, "nombre": "Arroz 500 g" },
+    { "id": 6, "nombre": "Leche 1 L" },
+    { "id": 7, "nombre": "Camiseta talla M" },
+    { "id": 8, "nombre": "Botella de agua 600 ml" }
+  ],
+  "casos": [
+    { "categoria": "wireframes", "texto": "Vendí 3 camisetas talla M", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 3, "producto": 7 }, "regresion": true },
+    { "categoria": "wireframes", "texto": "Entraron 40 unidades de arroz", "esperado": { "estado": "ok", "tipo": "entrada", "cantidad": 40, "producto": 5 }, "regresion": true },
+    { "categoria": "wireframes", "texto": "Vendi 3 gaseosas 1.5", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 3, "producto": 1 }, "regresion": true },
+    { "categoria": "wireframes", "texto": "se vendieron 6 gaseosas de 400", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 6, "producto": 2 }, "regresion": true },
+
+    { "categoria": "numeros y mermas", "texto": "vendí dos panes", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 2, "producto": 3 }, "regresion": true },
+    { "categoria": "numeros y mermas", "texto": "se dañaron tres huevos", "esperado": { "estado": "ok", "tipo": "merma", "cantidad": 3, "producto": 4 }, "regresion": true },
+    { "categoria": "numeros y mermas", "texto": "llegó una docena de huevos", "esperado": { "estado": "ok", "tipo": "entrada", "cantidad": 12, "producto": 4 }, "regresion": true },
+    { "categoria": "numeros y mermas", "texto": "se vencieron media docena de leches", "esperado": { "estado": "ok", "tipo": "merma", "cantidad": 6, "producto": 6 }, "regresion": true },
+    { "categoria": "numeros y mermas", "texto": "recibimos treinta y cinco arroces", "esperado": { "estado": "ok", "tipo": "entrada", "cantidad": 35, "producto": 5 }, "regresion": true },
+    { "categoria": "numeros y mermas", "texto": "le vendí a un señor 4 panes tajados", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 4, "producto": 3 }, "regresion": true },
+    { "categoria": "numeros y mermas", "texto": "compramos 20 leches al proveedor", "esperado": { "estado": "ok", "tipo": "entrada", "cantidad": 20, "producto": 6 }, "regresion": true },
+    { "categoria": "numeros y mermas", "texto": "se rompieron 2 botellas de agua", "esperado": { "estado": "ok", "tipo": "merma", "cantidad": 2, "producto": 8 }, "regresion": true },
+    { "categoria": "numeros y mermas", "texto": "Vendí 5 botellas de agua", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 5, "producto": 8 }, "regresion": true },
+
+    { "categoria": "a resolver", "texto": "se vendieron 6 gaseosas", "esperado": { "estado": "ambiguo", "tipo": "venta", "cantidad": 6, "producto": null, "candidatos": [1, 2] }, "regresion": true },
+    { "categoria": "a resolver", "texto": "vendí 2 chocolatinas", "esperado": { "estado": "sin_producto", "tipo": "venta", "cantidad": 2, "producto": null }, "regresion": true },
+    { "categoria": "a resolver", "texto": "vendí arroz", "esperado": { "estado": "sin_cantidad", "tipo": "venta", "cantidad": null, "producto": 5 }, "regresion": true },
+    { "categoria": "a resolver", "texto": "hola, buenos días", "esperado": { "estado": "no_entendido", "tipo": null, "cantidad": null, "producto": null }, "regresion": true },
+    { "categoria": "a resolver", "texto": "", "esperado": { "estado": "no_entendido", "tipo": null, "cantidad": null, "producto": null }, "regresion": true },
+    { "categoria": "a resolver", "texto": "vendí 2 gaseosas", "esperado": { "estado": "ambiguo", "tipo": "venta", "cantidad": 2, "producto": null, "candidatos": [1, 2] }, "regresion": true },
+    { "categoria": "a resolver", "texto": "gracias", "esperado": { "estado": "no_entendido", "tipo": null, "cantidad": null, "producto": null }, "regresion": true },
+
+    { "categoria": "consultas", "texto": "¿cuánto queda de arroz?", "esperado": { "estado": "consulta", "tipo": "consulta", "cantidad": null, "producto": 5 }, "regresion": true },
+    { "categoria": "consultas", "texto": "cuantos huevos hay", "esperado": { "estado": "consulta", "tipo": "consulta", "cantidad": null, "producto": 4 }, "regresion": true },
+    { "categoria": "consultas", "texto": "cuántas leches quedan", "esperado": { "estado": "consulta", "tipo": "consulta", "cantidad": null, "producto": 6 }, "regresion": true },
+    { "categoria": "consultas", "texto": "¿tienes camisetas?", "esperado": { "estado": "consulta", "tipo": "consulta", "cantidad": null, "producto": 7 } },
+
+    { "categoria": "coloquial", "texto": "despaché 3 leches", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 3, "producto": 6 }, "regresion": true },
+    { "categoria": "coloquial", "texto": "se llevaron 2 camisetas talla M", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 2, "producto": 7 }, "regresion": true },
+    { "categoria": "coloquial", "texto": "me compraron 4 arroces", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 4, "producto": 5 }, "regresion": true },
+    { "categoria": "coloquial", "texto": "acaban de llegar 30 huevos", "esperado": { "estado": "ok", "tipo": "entrada", "cantidad": 30, "producto": 4 } },
+    { "categoria": "coloquial", "texto": "repusimos 12 leches", "esperado": { "estado": "ok", "tipo": "entrada", "cantidad": 12, "producto": 6 }, "regresion": true },
+    { "categoria": "coloquial", "texto": "se nos dañaron 3 panes", "esperado": { "estado": "ok", "tipo": "merma", "cantidad": 3, "producto": 3 }, "regresion": true },
+    { "categoria": "coloquial", "texto": "botamos 2 huevos", "esperado": { "estado": "ok", "tipo": "merma", "cantidad": 2, "producto": 4 }, "regresion": true },
+    { "categoria": "coloquial", "texto": "se cayó una botella de agua y se rompió", "esperado": { "estado": "ok", "tipo": "merma", "cantidad": 1, "producto": 8 }, "regresion": true },
+    { "categoria": "coloquial", "texto": "hoy vendí 7 panes tajados", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 7, "producto": 3 }, "regresion": true },
+    { "categoria": "coloquial", "texto": "vendí 3 panes a 6000", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 3, "producto": 3 }, "regresion": true },
+    { "categoria": "coloquial", "texto": "quedé sin arroz, vendí los últimos 5", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 5, "producto": 5 }, "regresion": true },
+    { "categoria": "coloquial", "texto": "se cayó una caja y se perdieron 2 huevos", "esperado": { "estado": "ok", "tipo": "merma", "cantidad": 2, "producto": 4 }, "regresion": true },
+
+    { "categoria": "numeros en letras", "texto": "vendí cuarenta huevos", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 40, "producto": 4 }, "regresion": true },
+    { "categoria": "numeros en letras", "texto": "entraron veinticuatro leches", "esperado": { "estado": "ok", "tipo": "entrada", "cantidad": 24, "producto": 6 }, "regresion": true },
+    { "categoria": "numeros en letras", "texto": "vendí una camiseta talla M", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 1, "producto": 7 }, "regresion": true },
+    { "categoria": "numeros en letras", "texto": "vendí tres gaseosas de cuatrocientos", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 3, "producto": 2 } },
+    { "categoria": "numeros en letras", "texto": "se vendieron dos gaseosas de litro y medio", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 2, "producto": 1 } },
+    { "categoria": "numeros en letras", "texto": "llegaron cien arroces", "esperado": { "estado": "ok", "tipo": "entrada", "cantidad": 100, "producto": 5 }, "regresion": true },
+    { "categoria": "numeros en letras", "texto": "se dañó un par de huevos", "esperado": { "estado": "ok", "tipo": "merma", "cantidad": 2, "producto": 4 } },
+
+    { "categoria": "errores de dictado", "texto": "vendi 3 gasiosas de 400", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 3, "producto": 2 }, "regresion": true },
+    { "categoria": "errores de dictado", "texto": "ventí 2 panes", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 2, "producto": 3 } },
+    { "categoria": "errores de dictado", "texto": "se dañaron dos huebos", "esperado": { "estado": "ok", "tipo": "merma", "cantidad": 2, "producto": 4 } },
+    { "categoria": "errores de dictado", "texto": "vendí 2 camisetas talla eme", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 2, "producto": 7 }, "regresion": true },
+    { "categoria": "errores de dictado", "texto": "entraron 40 aroces", "esperado": { "estado": "ok", "tipo": "entrada", "cantidad": 40, "producto": 5 } },
+    { "categoria": "errores de dictado", "texto": "vendi tres panes tajado", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 3, "producto": 3 }, "regresion": true },
+    { "categoria": "errores de dictado", "texto": "se vendio 1 leche", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 1, "producto": 6 }, "regresion": true },
+
+    { "categoria": "nombres de producto", "texto": "vendí 2 camisetas", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 2, "producto": 7 }, "regresion": true },
+    { "categoria": "nombres de producto", "texto": "vendí 4 botellas", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 4, "producto": 8 }, "regresion": true },
+    { "categoria": "nombres de producto", "texto": "vendí 3 aguas", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 3, "producto": 8 }, "regresion": true },
+    { "categoria": "nombres de producto", "texto": "vendí 10 huevos", "esperado": { "estado": "ok", "tipo": "venta", "cantidad": 10, "producto": 4 }, "regresion": true },
+    { "categoria": "nombres de producto", "texto": "entraron 12 de leche", "esperado": { "estado": "ok", "tipo": "entrada", "cantidad": 12, "producto": 6 }, "regresion": true }
+  ]
+}

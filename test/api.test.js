@@ -3,11 +3,15 @@
 // de PostgreSQL (DATABASE_URL_PRUEBA), que se vacía al empezar.
 const test = require('node:test');
 const assert = require('node:assert');
+const http = require('node:http');
 const { Client } = require('pg');
 const { crearApp } = require('../servidor');
 
 let servidor;
 let base;
+let n8n;                // n8n simulado: lo que hace en cada prueba lo decide manejadorIA
+let manejadorIA = function (req, res) { res.writeHead(503); res.end(); };
+let recibidasIA = [];
 
 test.before(async function () {
   const url = process.env.DATABASE_URL_PRUEBA;
@@ -18,10 +22,16 @@ test.before(async function () {
   await c.connect();
   await c.query('DROP TABLE IF EXISTS movimientos, productos, sesiones, membresias, usuarios, negocios, migraciones');
   await c.end();
-  servidor = await crearApp({ urlDb: url, demo: true });
+  n8n = http.createServer(function (req, res) {
+    const partes = [];
+    req.on('data', function (c) { partes.push(c); });
+    req.on('end', function () { recibidasIA.push(Buffer.concat(partes).toString('utf8')); manejadorIA(req, res); });
+  });
+  const urlIA = await new Promise(function (r) { n8n.listen(0, '127.0.0.1', function () { r('http://127.0.0.1:' + n8n.address().port + '/webhook'); }); });
+  servidor = await crearApp({ urlDb: url, demo: true, ia: { url: urlIA, secreto: 'secreto-de-prueba', timeoutMs: 1000, limiteDiario: 1000 }, avisarIA: function () {} });
   await new Promise(function (r) { servidor.listen(0, '127.0.0.1', function () { base = 'http://127.0.0.1:' + servidor.address().port; r(); }); });
 });
-test.after(function () { servidor.close(); });
+test.after(function () { servidor.close(); n8n.close(); n8n.closeAllConnections(); });
 
 // Cliente mínimo que guarda la cookie de sesión como lo haría el navegador.
 function cliente() {
@@ -218,4 +228,43 @@ test('archivos: no se puede salir de public/ y hay cabeceras de seguridad', asyn
   const h = await fetch(base + '/api/config');
   assert.match(h.headers.get('content-security-policy'), /default-src 'self'/);
   assert.strictEqual(h.headers.get('x-content-type-options'), 'nosniff');
+});
+
+test('interpretar usa la IA cuando n8n responde bien y marca la fuente', async function () {
+  const s = await ingresar('demo@stockvoz.test');
+  await elegir(s.api, s.sesion, 'Tienda');
+  const pan = (await s.api('GET', '/api/productos')).datos.find(function (p) { return p.nombre === 'Pan tajado'; });
+  manejadorIA = function (req, res) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ estado: 'ok', tipo: 'venta', cantidad: 2, productoId: pan.id, candidatosIds: [], busqueda: '' }));
+  };
+  const r = await s.api('POST', '/api/interpretar', { texto: 'despaché dos pancitos' });
+  assert.strictEqual(r.estado, 200);
+  assert.deepStrictEqual([r.datos.fuente, r.datos.estado, r.datos.cantidad, r.datos.producto.id], ['ia', 'ok', 2, pan.id]);
+  assert.strictEqual(r.datos.producto.stock, pan.stock, 'el producto trae los datos reales del inventario, no los de la IA');
+});
+
+test('la IA no puede nombrar un producto de otro negocio y a n8n solo le llega el catálogo del negocio', async function () {
+  const dueña = await ingresar('demo@stockvoz.test');
+  await elegir(dueña.api, dueña.sesion, 'Papelería');
+  const ajeno = (await dueña.api('GET', '/api/productos')).datos[0];
+
+  const e = await ingresar('encargado@stockvoz.test');   // solo pertenece a la tienda
+  recibidasIA = [];
+  manejadorIA = function (req, res) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ estado: 'ok', tipo: 'venta', cantidad: 1, productoId: ajeno.id, candidatosIds: [], busqueda: '' }));
+  };
+  const r = await e.api('POST', '/api/interpretar', { texto: 'vendí 1 cuaderno' });
+  assert.deepStrictEqual([r.datos.fuente, r.datos.motivoRespaldo], ['reglas', 'invalida']);
+  assert.ok(!r.datos.producto || r.datos.producto.id !== ajeno.id);
+  assert.ok(recibidasIA.length === 1 && recibidasIA[0].indexOf('Cuaderno') === -1, 'n8n recibió productos de otro negocio');
+});
+
+test('si n8n falla, interpretar sigue funcionando con las reglas', async function () {
+  const s = await ingresar('encargado@stockvoz.test');
+  manejadorIA = function (req, res) { res.writeHead(500); res.end(); };
+  const r = await s.api('POST', '/api/interpretar', { texto: 'vendí 2 panes tajados' });
+  assert.strictEqual(r.estado, 200);
+  assert.deepStrictEqual([r.datos.fuente, r.datos.motivoRespaldo, r.datos.estado], ['reglas', 'http', 'ok']);
 });

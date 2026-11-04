@@ -9,7 +9,7 @@ require('./src/entorno');
 const db = require('./src/db');
 const auth = require('./src/auth');
 const inv = require('./src/inventario');
-const { interpretar } = require('./src/interprete');
+const { crearIA, configDesdeEntorno } = require('./src/ia');
 const { sembrarSiVacia } = require('./src/demo');
 const { ErrorApi } = require('./src/errores');
 
@@ -75,6 +75,7 @@ async function crearApp(opciones) {
   // La pantalla de ingreso muestra las cuentas de prueba solo si existen.
   const demo = opciones.demo !== false && Boolean(await db.uno(base, "SELECT 1 FROM usuarios WHERE correo = 'demo@stockvoz.test'"));
   const limitador = auth.crearLimitador();
+  const ia = crearIA(opciones.ia, { fetch: opciones.fetchIA, avisar: opciones.avisarIA });
   const segura = Boolean(opciones.cookieSegura);
 
   // Rutas: [método, patrón, requiere ('nada' | 'sesion' | 'negocio' | 'dueno'), manejador]
@@ -122,7 +123,7 @@ async function crearApp(opciones) {
     ['POST', /^\/api\/interpretar$/, 'negocio', async function (c) {
       const texto = typeof c.cuerpo.texto === 'string' ? c.cuerpo.texto.slice(0, 300) : '';
       const catalogo = await inv.listarProductos(base, c.negocioId, false);
-      return interpretar(texto, catalogo);
+      return ia.interpretar(texto, catalogo, c.negocioId);
     }],
     ['POST', /^\/api\/movimientos$/, 'negocio', function (c) {
       c.estado = 201;
@@ -187,9 +188,13 @@ async function crearApp(opciones) {
 if (require.main === module) {
   const puerto = Number(process.env.PORT) || 3000;
   // En producción (HTTPS) usar STOCKVOZ_COOKIE_SEGURA=1 para que la cookie solo viaje cifrada.
-  crearApp({ urlDb: process.env.DATABASE_URL, demo: process.env.STOCKVOZ_DEMO !== '0', cookieSegura: process.env.STOCKVOZ_COOKIE_SEGURA === '1' })
+  let configIA = null;
+  try { configIA = configDesdeEntorno(process.env); } catch (e) { console.error('No se pudo iniciar StockVoz: ' + e.message); process.exit(1); }
+  crearApp({ urlDb: process.env.DATABASE_URL, demo: process.env.STOCKVOZ_DEMO !== '0', cookieSegura: process.env.STOCKVOZ_COOKIE_SEGURA === '1', ia: configIA })
     .then(function (servidor) {
-      servidor.listen(puerto, function () { console.log('StockVoz escuchando en http://localhost:' + puerto); });
+      servidor.listen(puerto, function () {
+        console.log('StockVoz escuchando en http://localhost:' + puerto + (configIA ? ' (IA activa vía n8n)' : ' (interpretación solo por reglas)'));
+      });
     })
     .catch(function (e) {
       console.error('No se pudo iniciar StockVoz: ' + e.message);
