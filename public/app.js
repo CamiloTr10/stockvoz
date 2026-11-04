@@ -15,6 +15,7 @@
   var TIPOS = { venta: 'Venta', entrada: 'Entrada', merma: 'Merma' };
   var ESTADOS = { ok: 'OK', bajo: 'Bajo', agotado: 'Agotado' };
   var ORIGENES = { voz: 'Voz', texto: 'Texto', manual: 'Manual', inicial: 'Stock inicial' };
+  var ROLES = { dueno: 'Dueño', encargado: 'Encargado' };
 
   /* ---------- Utilidades ---------- */
   // Todo dato que viene del servidor o del usuario pasa por esc() antes de ir al HTML.
@@ -119,6 +120,7 @@
     document.getElementById('negocio-actual').textContent = s && s.negocio
       ? s.negocio.nombre + ' · ' + (s.rol === 'dueno' ? 'Dueño' : 'Encargado') : '';
     document.getElementById('btn-cambiar').hidden = !(s && s.negocios.length > 1);
+    document.getElementById('btn-equipo').hidden = !(s && s.rol === 'dueno');
     document.querySelectorAll('.nav a').forEach(function (a) {
       var activa = location.hash.indexOf(a.getAttribute('data-ruta')) === 0;
       a.classList.toggle('activa', activa);
@@ -133,11 +135,14 @@
     });
   });
   document.getElementById('btn-cambiar').addEventListener('click', function () { location.hash = '#/negocio'; });
+  document.getElementById('btn-equipo').addEventListener('click', function () { location.hash = '#/equipo'; });
 
   var RUTAS = {
     '#/ingresar': vistaIngreso,
     '#/registro': vistaRegistro,
     '#/negocio': vistaNegocio,
+    '#/unirme': vistaUnirme,
+    '#/equipo': vistaEquipo,
     '#/panel': vistaPanel,
     '#/registrar': vistaRegistrar,
     '#/inventario': vistaInventario,
@@ -145,6 +150,7 @@
     '#/reportes': vistaReportes
   };
   var PUBLICAS = ['#/ingresar', '#/registro'];
+  var SIN_NEGOCIO = ['#/negocio', '#/unirme'];
 
   function rutaActual() {
     var base = location.hash.split('?')[0];
@@ -161,7 +167,8 @@
     var publica = PUBLICAS.indexOf(ruta) !== -1;
     if (!estado.sesion && !publica) { location.hash = '#/ingresar'; return; }
     if (estado.sesion && publica) { location.hash = '#/panel'; return; }
-    if (estado.sesion && !estado.sesion.negocio && ruta !== '#/negocio') { location.hash = '#/negocio'; return; }
+    // Sin negocio activo solo se puede elegir uno o unirse a otro con un código.
+    if (estado.sesion && !estado.sesion.negocio && SIN_NEGOCIO.indexOf(ruta) === -1) { location.hash = '#/negocio'; return; }
     pintarBarra();
     RUTAS[ruta]();
   }
@@ -220,18 +227,29 @@
     });
   }
 
+  // Dos modos: crear tu propio negocio, o entrar al de alguien más con un código de invitación.
+  // El enlace que comparte el dueño trae el código: #/registro?codigo=ABCD-EFGH
   function vistaRegistro() {
+    var codigo = parametro('codigo');
+    var invitado = codigo !== null;
     render(
       '<section class="acceso">' +
         '<div class="acceso-marca"><img src="logo.svg" alt="" width="56" height="56"><h1>Crear cuenta</h1>' +
-        '<p>Tu negocio tendrá su propio espacio: sus datos no se mezclan con los de otros negocios.</p></div>' +
+        '<p>' + (invitado
+          ? 'Vas a entrar al negocio que te invitó. El dueño decide qué puedes hacer.'
+          : 'Tu negocio tendrá su propio espacio: sus datos no se mezclan con los de otros negocios.') + '</p></div>' +
         '<form id="form-registro" class="tarjeta form" novalidate>' +
-          '<label for="negocio">Nombre del negocio</label><input id="negocio" maxlength="80" autocomplete="organization" required>' +
+          (invitado
+            ? '<label for="codigo">Código de invitación</label><input id="codigo" class="entrada-codigo" maxlength="20" autocomplete="off" spellcheck="false" autocapitalize="characters" placeholder="ABCD-EFGH" value="' + esc(codigo) + '" required>'
+            : '<label for="negocio">Nombre del negocio</label><input id="negocio" maxlength="80" autocomplete="organization" required>') +
           '<label for="nombre">Tu nombre</label><input id="nombre" maxlength="80" autocomplete="name" required>' +
           '<label for="correo">Correo</label><input id="correo" type="email" maxlength="120" autocomplete="email" required>' +
           '<label for="clave">Contraseña <small>(mínimo 8 caracteres)</small></label><input id="clave" type="password" minlength="8" autocomplete="new-password" required>' +
           '<div id="error-registro"></div>' +
           '<button class="btn btn--grande" type="submit">Crear cuenta</button>' +
+          '<p class="nota">' + (invitado
+            ? '¿Vas a abrir tu propio negocio? <a href="#/registro">Créalo aquí</a>'
+            : '¿Te invitaron a un negocio? <a href="#/registro?codigo=">Entra con el código</a>') + '</p>' +
           '<p class="nota">¿Ya tienes cuenta? <a href="#/ingresar">Ingresar</a></p>' +
         '</form>' +
       '</section>', 'Crear cuenta');
@@ -241,27 +259,37 @@
       ev.preventDefault();
       var zona = document.getElementById('error-registro');
       if (form.clave.value.length < 8) { errorEn(zona, 'La contraseña debe tener al menos 8 caracteres.'); return; }
-      api('POST', '/api/registro', {
-        negocio: form.negocio.value, nombre: form.nombre.value, correo: form.correo.value, clave: form.clave.value
-      }).then(function (s) {
-        avisar('Cuenta creada. Empieza agregando tus productos.');
+      var datos = { nombre: form.nombre.value, correo: form.correo.value, clave: form.clave.value };
+      if (invitado) { datos.codigo = form.codigo.value; } else { datos.negocio = form.negocio.value; }
+      api('POST', '/api/registro', datos).then(function (s) {
         estado.sesion = s;
-        location.hash = '#/inventario?nuevo=1';
+        if (invitado) {
+          avisar('Listo, ya haces parte de ' + s.negocios[0].nombre + '.');
+          location.hash = '#/panel';
+        } else {
+          avisar('Cuenta creada. Empieza agregando tus productos.');
+          location.hash = '#/inventario?nuevo=1';
+        }
       }).catch(function (e) { errorEn(zona, e.message); });
     });
+    if (invitado && !codigo) { document.getElementById('codigo').focus(); }
   }
 
   function vistaNegocio() {
     var s = estado.sesion;
     render(
       '<section class="acceso">' +
-        '<div class="acceso-marca"><h1>¿En qué negocio vas a trabajar?</h1><p>Hola, ' + esc(s.usuario.nombre) + '. Tienes acceso a ' + s.negocios.length + ' negocios.</p></div>' +
+        '<div class="acceso-marca"><h1>' + (s.negocios.length ? '¿En qué negocio vas a trabajar?' : 'Todavía no estás en ningún negocio') + '</h1>' +
+        '<p>Hola, ' + esc(s.usuario.nombre) + '. ' + (s.negocios.length
+          ? 'Tienes acceso a ' + s.negocios.length + (s.negocios.length === 1 ? ' negocio.' : ' negocios.')
+          : 'Pídele al dueño del negocio un código de invitación.') + '</p></div>' +
         '<ul class="lista-negocios" role="list">' +
         s.negocios.map(function (n) {
           return '<li><button type="button" class="tarjeta negocio-btn" data-id="' + n.id + '"><b>' + esc(n.nombre) + '</b><span>' +
             (n.rol === 'dueno' ? 'Dueño' : 'Encargado') + '</span></button></li>';
         }).join('') +
         '</ul>' +
+        '<p class="nota"><a href="#/unirme">Tengo un código de invitación para otro negocio</a></p>' +
       '</section>', 'Elegir negocio');
 
     vista.querySelectorAll('.negocio-btn').forEach(function (b) {
@@ -271,6 +299,136 @@
           .catch(function (e) { avisar(e.message, true); });
       });
     });
+  }
+
+  function copiar(texto, queEs) {
+    if (!navigator.clipboard) { avisar('Tu navegador no permite copiar solo. Selecciona el ' + queEs + ' y cópialo a mano.', true); return; }
+    navigator.clipboard.writeText(texto).then(
+      function () { avisar(queEs.charAt(0).toUpperCase() + queEs.slice(1) + ' copiado.'); },
+      function () { avisar('No se pudo copiar. Selecciónalo y cópialo a mano.', true); }
+    );
+  }
+
+  // Pantalla para escribir un código de invitación teniendo ya una cuenta.
+  function vistaUnirme() {
+    render(
+      '<section class="acceso">' +
+        '<div class="acceso-marca"><h1>Unirme a un negocio</h1><p>Escribe el código que te pasó el dueño del negocio.</p></div>' +
+        '<form id="form-unirme" class="tarjeta form" novalidate>' +
+          '<label for="codigo">Código de invitación</label>' +
+          '<input id="codigo" class="entrada-codigo" maxlength="20" required placeholder="ABCD-EFGH" autocomplete="off" spellcheck="false" autocapitalize="characters">' +
+          '<div id="error-unirme"></div>' +
+          '<button class="btn btn--grande" type="submit">Unirme</button>' +
+          '<p class="nota"><a href="#/negocio">Volver</a></p>' +
+        '</form>' +
+      '</section>', 'Unirme a un negocio');
+
+    var form = document.getElementById('form-unirme');
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var zona = document.getElementById('error-unirme');
+      var boton = form.querySelector('button[type=submit]');
+      boton.disabled = true;
+      api('POST', '/api/invitaciones/aceptar', { codigo: form.codigo.value }).then(function (sesion) {
+        estado.sesion = sesion;
+        avisar('Listo, ya haces parte del negocio.');
+        location.hash = sesion.negocio ? '#/panel' : '#/negocio';
+      }).catch(function (e) { errorEn(zona, e.message); boton.disabled = false; });
+    });
+    document.getElementById('codigo').focus();
+  }
+
+  // Equipo del negocio: quién entra, con qué permisos, e invitaciones pendientes. Solo el dueño.
+  function vistaEquipo() {
+    render(
+      '<div class="encabezado"><div><h1>Equipo</h1><p class="sub">Quién puede entrar a este negocio y con qué permisos.</p></div></div>' +
+      '<div class="tarjeta">' +
+        '<h2>Invitar a alguien</h2>' +
+        '<p class="sub">Genera un código y pásaselo por WhatsApp o dictándoselo. Sirve una sola vez y vence a los 7 días.</p>' +
+        '<div class="acciones">' +
+          '<label for="rol-invitar" class="visually-hidden">Permisos de la persona invitada</label>' +
+          '<select id="rol-invitar">' +
+            '<option value="encargado">Encargado: registra ventas, entradas y mermas</option>' +
+            '<option value="dueno">Dueño: además administra productos y el equipo</option>' +
+          '</select>' +
+          '<button type="button" class="btn" id="btn-generar">Generar código</button>' +
+        '</div>' +
+        '<div id="zona-codigo"></div>' +
+      '</div>' +
+      '<div id="zona-equipo" class="tarjeta"><p class="cargando">Cargando…</p></div>', 'Equipo');
+
+    var zona = document.getElementById('zona-equipo');
+    var zonaCodigo = document.getElementById('zona-codigo');
+
+    function cargar() {
+      api('GET', '/api/equipo').then(function (d) {
+        zona.innerHTML =
+          '<h2>Quién tiene acceso</h2>' +
+          '<div class="tabla-envoltura"><table class="tabla"><thead><tr><th scope="col">Persona</th><th scope="col">Correo</th>' +
+          '<th scope="col">Permisos</th><th scope="col"><span class="visually-hidden">Acciones</span></th></tr></thead><tbody>' +
+          d.miembros.map(function (m) {
+            var yo = estado.sesion && m.id === estado.sesion.usuario.id;
+            return '<tr><td data-etiqueta="Persona"><b>' + esc(m.nombre) + '</b>' + (yo ? ' <small>(tú)</small>' : '') + '</td>' +
+              '<td data-etiqueta="Correo">' + esc(m.correo) + '</td>' +
+              '<td data-etiqueta="Permisos">' + esc(ROLES[m.rol] || m.rol) + '</td>' +
+              '<td class="acciones-fila">' + (yo ? '' : '<button type="button" class="enlace enlace--peligro" data-quitar="' + m.id +
+                '" data-nombre="' + esc(m.nombre) + '">Quitar<span class="visually-hidden"> a ' + esc(m.nombre) + '</span></button>') + '</td></tr>';
+          }).join('') + '</tbody></table></div>' +
+          '<h2>Invitaciones pendientes</h2>' +
+          (d.invitaciones.length
+            ? '<div class="tabla-envoltura"><table class="tabla"><thead><tr><th scope="col">Permisos</th><th scope="col">Creada</th>' +
+              '<th scope="col">Vence</th><th scope="col"><span class="visually-hidden">Acciones</span></th></tr></thead><tbody>' +
+              d.invitaciones.map(function (i) {
+                return '<tr><td data-etiqueta="Permisos">' + esc(ROLES[i.rol] || i.rol) + '</td>' +
+                  '<td data-etiqueta="Creada">' + esc(fechaHora.format(new Date(i.creadaEn))) + '</td>' +
+                  '<td data-etiqueta="Vence">' + esc(fechaHora.format(new Date(i.expiraEn))) + '</td>' +
+                  '<td class="acciones-fila"><button type="button" class="enlace enlace--peligro" data-cancelar="' + i.id + '">Cancelar</button></td></tr>';
+              }).join('') + '</tbody></table></div>'
+            : '<p class="vacio">No hay invitaciones pendientes.</p>');
+
+        zona.querySelectorAll('[data-quitar]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            var nombre = b.getAttribute('data-nombre');
+            confirmar('¿Quitar a ' + nombre + '?',
+              nombre + ' dejará de ver este negocio de inmediato. Los movimientos que registró se conservan en el historial.',
+              'Sí, quitar').then(function (ok) {
+                if (!ok) { return; }
+                api('DELETE', '/api/equipo/miembros/' + b.getAttribute('data-quitar'))
+                  .then(function () { avisar(nombre + ' ya no tiene acceso a este negocio.'); cargar(); })
+                  .catch(function (e) { avisar(e.message, true); });
+              });
+          });
+        });
+        zona.querySelectorAll('[data-cancelar]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            api('DELETE', '/api/equipo/invitaciones/' + b.getAttribute('data-cancelar'))
+              .then(function () { avisar('Invitación cancelada: ese código ya no sirve.'); cargar(); })
+              .catch(function (e) { avisar(e.message, true); });
+          });
+        });
+      }).catch(function (e) { errorEn(zona, e.message); });
+    }
+
+    document.getElementById('btn-generar').addEventListener('click', function (ev) {
+      var boton = ev.currentTarget;
+      boton.disabled = true;
+      api('POST', '/api/equipo/invitaciones', { rol: document.getElementById('rol-invitar').value }).then(function (inv) {
+        var enlace = location.origin + location.pathname + '#/registro?codigo=' + encodeURIComponent(inv.codigo);
+        zonaCodigo.innerHTML = '<div class="codigo-caja">' +
+          '<p class="etiqueta-codigo">Código para <b>' + esc(ROLES[inv.rol] || inv.rol) + '</b> · vence el ' + esc(fechaHora.format(new Date(inv.expiraEn))) + '</p>' +
+          '<p class="codigo">' + esc(inv.codigo) + '</p>' +
+          '<div class="acciones"><button type="button" class="btn btn--blanco" id="copiar-codigo">Copiar código</button>' +
+          '<button type="button" class="btn btn--blanco" id="copiar-enlace">Copiar enlace</button></div>' +
+          '<p class="nota">Anótalo ahora: por seguridad el código no se vuelve a mostrar. Quien lo use entrará como ' +
+          esc((ROLES[inv.rol] || inv.rol).toLowerCase()) + '.</p></div>';
+        document.getElementById('copiar-codigo').addEventListener('click', function () { copiar(inv.codigo, 'código'); });
+        document.getElementById('copiar-enlace').addEventListener('click', function () { copiar(enlace, 'enlace'); });
+        boton.disabled = false;
+        cargar();
+      }).catch(function (e) { boton.disabled = false; avisar(e.message, true); });
+    });
+
+    cargar();
   }
 
   /* ---------- Panel ---------- */

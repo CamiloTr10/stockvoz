@@ -20,7 +20,8 @@ test.before(async function () {
   assert.match(new URL(url).pathname, /_prueba$/, 'La base de pruebas debe llamarse algo_prueba.');
   const c = new Client({ connectionString: url });
   await c.connect();
-  await c.query('DROP TABLE IF EXISTS movimientos, productos, sesiones, membresias, usuarios, negocios, migraciones');
+  // CASCADE: así no hay que actualizar esta lista cada vez que una migración agrega una tabla.
+  await c.query('DROP TABLE IF EXISTS invitaciones, movimientos, productos, sesiones, membresias, usuarios, negocios, migraciones CASCADE');
   await c.end();
   n8n = http.createServer(function (req, res) {
     const partes = [];
@@ -385,4 +386,175 @@ test('dos anulaciones simultáneas del mismo movimiento devuelven el stock una s
   assert.deepStrictEqual(r.map(function (x) { return x.estado; }).sort(), [200, 409, 409]);
   const despues = (await s.api('GET', '/api/productos')).datos.find(function (x) { return x.id === v.productoId; });
   assert.strictEqual(despues.stock, v.stockAntes, 'el stock se devolvió una sola vez');
+});
+
+// ---------- Invitar al equipo ----------
+
+let seqEquipo = 0;
+
+// Crea una cuenta nueva con su propio negocio y devuelve su cliente.
+async function cuentaNueva(negocio) {
+  seqEquipo += 1;
+  const api = cliente();
+  const correo = 'equipo' + seqEquipo + '@stockvoz.test';
+  const r = await api('POST', '/api/registro', { negocio: negocio, nombre: 'Persona ' + seqEquipo, correo: correo, clave: 'clave-segura-1' });
+  assert.strictEqual(r.estado, 201, JSON.stringify(r.datos));
+  return { api: api, sesion: r.datos, correo: correo, id: r.datos.usuario.id };
+}
+
+async function invitar(dueño, rol) {
+  const r = await dueño.api('POST', '/api/equipo/invitaciones', { rol: rol });
+  assert.strictEqual(r.estado, 201, JSON.stringify(r.datos));
+  return r.datos;
+}
+
+test('el dueño invita y quien ya tiene cuenta se une con el código', async function () {
+  const dueño = await cuentaNueva('Tienda invitaciones A');
+  const inv = await invitar(dueño, 'encargado');
+  assert.match(inv.codigo, /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}-[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}$/);
+
+  const otra = await cuentaNueva('Negocio propio de la invitada');
+  assert.strictEqual(otra.sesion.negocios.length, 1);
+  // Se escribe en minúsculas y sin guion, como lo teclearía alguien de prisa.
+  const r = await otra.api('POST', '/api/invitaciones/aceptar', { codigo: inv.codigo.replace('-', '').toLowerCase() });
+  assert.strictEqual(r.estado, 200, JSON.stringify(r.datos));
+  const nuevo = r.datos.negocios.find(function (n) { return n.nombre === 'Tienda invitaciones A'; });
+  assert.ok(nuevo, 'debe aparecer el negocio al que fue invitada');
+  assert.strictEqual(nuevo.rol, 'encargado');
+});
+
+test('el código de invitación solo sirve una vez', async function () {
+  const dueño = await cuentaNueva('Tienda invitaciones B');
+  const inv = await invitar(dueño, 'encargado');
+  const primera = await cuentaNueva('Negocio de la primera');
+  assert.strictEqual((await primera.api('POST', '/api/invitaciones/aceptar', { codigo: inv.codigo })).estado, 200);
+  const segunda = await cuentaNueva('Negocio de la segunda');
+  const r = await segunda.api('POST', '/api/invitaciones/aceptar', { codigo: inv.codigo });
+  assert.strictEqual(r.estado, 404);
+  assert.match(r.datos.error, /ya usado o vencido/);
+});
+
+test('un código inventado o mal escrito no sirve', async function () {
+  const quien = await cuentaNueva('Negocio del que prueba códigos');
+  for (const codigo of ['ABCD-EFGH', 'corto', '', null, 'ABCDEFGHIJKLMNOP']) {
+    assert.strictEqual((await quien.api('POST', '/api/invitaciones/aceptar', { codigo: codigo })).estado, 404, String(codigo));
+  }
+});
+
+test('si ya haces parte del negocio el código no se gasta', async function () {
+  const dueño = await cuentaNueva('Tienda invitaciones C');
+  const inv = await invitar(dueño, 'encargado');
+  const r = await dueño.api('POST', '/api/invitaciones/aceptar', { codigo: inv.codigo });
+  assert.strictEqual(r.estado, 409);
+  assert.match(r.datos.error, /Ya haces parte/);
+  // Sigue sirviendo para otra persona.
+  const otra = await cuentaNueva('Negocio de otra más');
+  assert.strictEqual((await otra.api('POST', '/api/invitaciones/aceptar', { codigo: inv.codigo })).estado, 200);
+});
+
+test('alguien sin cuenta se registra con el código y entra al negocio, sin crear uno nuevo', async function () {
+  const dueño = await cuentaNueva('Tienda invitaciones D');
+  const inv = await invitar(dueño, 'encargado');
+
+  const api = cliente();
+  const r = await api('POST', '/api/registro', { codigo: inv.codigo, nombre: 'Empleado nuevo', correo: 'empleado-nuevo@stockvoz.test', clave: 'clave-segura-1' });
+  assert.strictEqual(r.estado, 201, JSON.stringify(r.datos));
+  assert.strictEqual(r.datos.negocios.length, 1, 'no debe crearse un negocio aparte');
+  assert.strictEqual(r.datos.negocios[0].nombre, 'Tienda invitaciones D');
+  assert.strictEqual(r.datos.rol, 'encargado');
+  // Y el rol se respeta: un encargado no administra productos.
+  assert.strictEqual((await api('POST', '/api/productos', { nombre: 'Algo', precio: 100 })).estado, 403);
+});
+
+test('registrarse con un código inválido no crea la cuenta', async function () {
+  const api = cliente();
+  assert.strictEqual((await api('POST', '/api/registro', { codigo: 'ZZZZ-ZZZZ', nombre: 'Nadie', correo: 'nadie@stockvoz.test', clave: 'clave-segura-1' })).estado, 404);
+  assert.strictEqual((await cliente()('POST', '/api/sesion', { correo: 'nadie@stockvoz.test', clave: 'clave-segura-1' })).estado, 401);
+});
+
+test('el dueño ve su equipo y las invitaciones pendientes, nunca el código', async function () {
+  const dueño = await cuentaNueva('Tienda invitaciones E');
+  const inv = await invitar(dueño, 'encargado');
+  const r = await dueño.api('GET', '/api/equipo');
+  assert.strictEqual(r.estado, 200);
+  assert.strictEqual(r.datos.miembros.length, 1);
+  assert.deepStrictEqual([r.datos.miembros[0].correo, r.datos.miembros[0].rol], [dueño.correo, 'dueno']);
+  assert.strictEqual(r.datos.invitaciones.length, 1);
+  assert.deepStrictEqual(Object.keys(r.datos.invitaciones[0]).sort(), ['creadaEn', 'expiraEn', 'id', 'rol']);
+  assert.ok(JSON.stringify(r.datos).indexOf(inv.codigo.replace('-', '')) === -1, 'el código no debe viajar en la lista');
+});
+
+test('el encargado no puede invitar ni ver el equipo', async function () {
+  const dueño = await cuentaNueva('Tienda invitaciones F');
+  const inv = await invitar(dueño, 'encargado');
+  const api = cliente();
+  await api('POST', '/api/registro', { codigo: inv.codigo, nombre: 'Encargada F', correo: 'encargada-f@stockvoz.test', clave: 'clave-segura-1' });
+  assert.strictEqual((await api('GET', '/api/equipo')).estado, 403);
+  assert.strictEqual((await api('POST', '/api/equipo/invitaciones', { rol: 'encargado' })).estado, 403);
+});
+
+test('se puede cancelar una invitación que todavía no se usó', async function () {
+  const dueño = await cuentaNueva('Tienda invitaciones G');
+  const inv = await invitar(dueño, 'encargado');
+  assert.strictEqual((await dueño.api('DELETE', '/api/equipo/invitaciones/' + inv.id)).estado, 200);
+  assert.strictEqual((await dueño.api('GET', '/api/equipo')).datos.invitaciones.length, 0);
+  assert.strictEqual((await dueño.api('DELETE', '/api/equipo/invitaciones/' + inv.id)).estado, 404);
+
+  const otra = await cuentaNueva('Negocio de la que llegó tarde');
+  assert.strictEqual((await otra.api('POST', '/api/invitaciones/aceptar', { codigo: inv.codigo })).estado, 404);
+});
+
+test('el dueño quita a alguien del negocio y esa persona deja de verlo', async function () {
+  const dueño = await cuentaNueva('Tienda invitaciones H');
+  const inv = await invitar(dueño, 'encargado');
+  const api = cliente();
+  const alta = await api('POST', '/api/registro', { codigo: inv.codigo, nombre: 'Encargado H', correo: 'encargado-h@stockvoz.test', clave: 'clave-segura-1' });
+  const idEncargado = alta.datos.usuario.id;
+  assert.strictEqual((await api('GET', '/api/productos')).estado, 200);
+
+  assert.strictEqual((await dueño.api('DELETE', '/api/equipo/miembros/' + idEncargado)).estado, 200);
+  assert.strictEqual((await api('GET', '/api/productos')).estado, 409, 'su sesión ya no tiene ese negocio');
+  assert.deepStrictEqual((await api('GET', '/api/sesion')).datos.negocios, []);
+  assert.strictEqual((await dueño.api('GET', '/api/equipo')).datos.miembros.length, 1);
+});
+
+test('el dueño no puede quitarse a sí mismo', async function () {
+  const dueño = await cuentaNueva('Tienda invitaciones I');
+  const r = await dueño.api('DELETE', '/api/equipo/miembros/' + dueño.id);
+  assert.strictEqual(r.estado, 409);
+  assert.match(r.datos.error, /ti mismo/);
+  assert.strictEqual((await dueño.api('GET', '/api/equipo')).datos.miembros.length, 1);
+});
+
+test('no se puede quitar a alguien de otro negocio', async function () {
+  const unoA = await cuentaNueva('Tienda invitaciones J');
+  const otroB = await cuentaNueva('Tienda invitaciones K');
+  assert.strictEqual((await unoA.api('DELETE', '/api/equipo/miembros/' + otroB.id)).estado, 404);
+  assert.strictEqual((await otroB.api('GET', '/api/equipo')).datos.miembros.length, 1);
+});
+
+test('dos personas usando el mismo código a la vez: solo entra una', async function () {
+  const dueño = await cuentaNueva('Tienda invitaciones L');
+  const inv = await invitar(dueño, 'encargado');
+  const a = await cuentaNueva('Negocio de la rápida');
+  const b = await cuentaNueva('Negocio de la otra rápida');
+  const r = await Promise.all([a, b].map(function (q) { return q.api('POST', '/api/invitaciones/aceptar', { codigo: inv.codigo }); }));
+  assert.deepStrictEqual(r.map(function (x) { return x.estado; }).sort(), [200, 404]);
+  assert.strictEqual((await dueño.api('GET', '/api/equipo')).datos.miembros.length, 2);
+});
+
+test('quien se queda sin negocio entra directo al del código que use', async function () {
+  const dueño = await cuentaNueva('Tienda invitaciones M');
+  const primera = await invitar(dueño, 'encargado');
+  const api = cliente();
+  const alta = await api('POST', '/api/registro', { codigo: primera.codigo, nombre: 'Persona que rota', correo: 'rotando@stockvoz.test', clave: 'clave-segura-1' });
+  await dueño.api('DELETE', '/api/equipo/miembros/' + alta.datos.usuario.id);
+  assert.strictEqual((await api('GET', '/api/sesion')).datos.negocio, null, 'se queda sin negocio activo');
+
+  const otroDueño = await cuentaNueva('Tienda invitaciones N');
+  const segunda = await invitar(otroDueño, 'encargado');
+  const r = await api('POST', '/api/invitaciones/aceptar', { codigo: segunda.codigo });
+  assert.strictEqual(r.estado, 200, JSON.stringify(r.datos));
+  assert.strictEqual(r.datos.negocio.nombre, 'Tienda invitaciones N', 'queda trabajando en el negocio nuevo');
+  assert.strictEqual((await api('GET', '/api/productos')).estado, 200);
 });

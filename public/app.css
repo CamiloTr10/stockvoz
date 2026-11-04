@@ -295,3 +295,12 @@ dialog::backdrop { background: rgba(13, 18, 51, .55); }
 .mov--anulado td[data-etiqueta="Cantidad"] { text-decoration: line-through; }
 .nota-anulado { color: var(--muted); font-weight: 600; white-space: nowrap; }
 .enlace--peligro { color: var(--danger); }
+
+/* Código de invitación: grande y separado, para dictarlo o copiarlo sin equivocarse. */
+.codigo-caja { margin-top: 1.2rem; border: var(--edge); border-radius: 10px; background: var(--ice); padding: 1rem 1.2rem; }
+.etiqueta-codigo { margin: 0 0 .4rem; color: var(--muted); font-size: .9rem; }
+.codigo { margin: 0; font: 800 clamp(1.6rem, 6vw, 2.3rem)/1.2 var(--font-display); letter-spacing: .12em; color: var(--ink); word-break: break-all; }
+.codigo-caja .nota { text-align: left; margin-bottom: 0; }
+.entrada-codigo { font: 700 1.3rem var(--font-display); letter-spacing: .1em; text-transform: uppercase; }
+#zona-equipo h2 { margin-top: 1.6rem; }
+#zona-equipo h2:first-child { margin-top: 0; }

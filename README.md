@@ -74,8 +74,8 @@ cd stockvoz
 node --test
 ```
 
-95 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con un n8n simulado (13) y la API de punta a punta (aislamiento entre negocios,
-roles, stock insuficiente, ventas simultáneas, anulaciones, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
+109 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con un n8n simulado (13) y la API de punta a punta (aislamiento entre negocios,
+roles, stock insuficiente, ventas simultáneas, anulaciones, invitaciones, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
 Las que usan la base lo hacen sobre `DATABASE_URL_PRUEBA` y se niegan a correr si esa base no termina en `_prueba`.
 
 ## Migraciones de la base de datos
@@ -123,7 +123,7 @@ stockvoz/
 │   ├── interprete.js    Frase en español → operación propuesta (tipo, producto, cantidad), por reglas
 │   ├── ia.js            Interpretación con IA vía n8n: validación de la respuesta y respaldo por reglas
 │   ├── inventario.js    Reglas del inventario: productos, movimientos, panel y reportes
-│   ├── auth.js          Cuentas, contraseñas (scrypt), sesiones y límite de intentos
+│   ├── auth.js          Cuentas, contraseñas (scrypt), sesiones, invitaciones y límite de intentos
 │   ├── db.js            Pool de PostgreSQL, migraciones y transacciones
 │   ├── entorno.js       Lectura del archivo .env
 │   ├── demo.js          Datos de demostración
@@ -150,10 +150,15 @@ Todas las rutas responden JSON. Las de inventario usan siempre el negocio de la 
 | Método | Ruta | Requiere | Descripción |
 |---|---|---|---|
 | GET | `/api/config` | — | Si hay cuentas demo |
-| POST | `/api/registro` | — | Crea negocio + usuario dueño |
+| POST | `/api/registro` | — | Crea cuenta: con `negocio` crea uno nuevo (dueño), con `codigo` entra al que lo invitó |
 | POST | `/api/sesion` | — | Ingresar (`correo`, `clave`) |
 | GET / DELETE | `/api/sesion` | sesión | Ver sesión / salir |
 | POST | `/api/sesion/negocio` | sesión | Elegir negocio activo |
+| POST | `/api/invitaciones/aceptar` | sesión | Unirse a un negocio con un `codigo` |
+| GET | `/api/equipo` | dueño | Miembros del negocio e invitaciones pendientes |
+| POST | `/api/equipo/invitaciones` | dueño | Crear un código (`rol`); se devuelve una sola vez |
+| DELETE | `/api/equipo/invitaciones/:id` | dueño | Cancelar una invitación sin usar |
+| DELETE | `/api/equipo/miembros/:id` | dueño | Quitar a alguien del negocio |
 | GET | `/api/productos` | negocio | Lista (`?inactivos=1` incluye desactivados) |
 | POST | `/api/productos` | dueño | Crear (`nombre`, `precio`, `stock`, `stockMinimo`) |
 | PATCH | `/api/productos/:id` | dueño | Editar nombre, precio, mínimo o `activo` |
@@ -178,6 +183,19 @@ Todas las rutas responden JSON. Las de inventario usan siempre el negocio de la 
 - El nombre del producto es único por negocio sin distinguir mayúsculas (índice sobre `lower(nombre)`).
 - Al registrar un movimiento, la fila del producto se bloquea (`SELECT … FOR UPDATE`) hasta guardar:
   dos ventas simultáneas se atienden una tras otra y el stock nunca queda negativo.
+
+## Equipo del negocio
+
+El dueño genera un **código de invitación** desde la pantalla **Equipo** y se lo pasa a su empleado
+(por WhatsApp, dictándoselo o con el enlace que la misma pantalla copia). Quien lo recibe entra con él,
+tenga cuenta o no.
+
+- El código sirve **una sola vez** y vence a los **7 días**. En la base solo se guarda su hash, así que
+  solo se ve una vez, al crearlo.
+- El rol (dueño o encargado) lo decide quien invita.
+- El dueño puede cancelar una invitación sin usar y quitar a alguien del negocio; quien es quitado deja
+  de ver ese negocio en el acto, y los movimientos que registró se conservan.
+- Nadie puede quitarse a sí mismo: así siempre queda al menos un dueño.
 
 ## Decisiones y atajos conscientes
 

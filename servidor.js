@@ -75,6 +75,8 @@ async function crearApp(opciones) {
   // La pantalla de ingreso muestra las cuentas de prueba solo si existen.
   const demo = opciones.demo !== false && Boolean(await db.uno(base, "SELECT 1 FROM usuarios WHERE correo = 'demo@stockvoz.test'"));
   const limitador = auth.crearLimitador();
+  // Frena el probar códigos de invitación al azar (ver la ruta de aceptar).
+  const limitadorCodigos = auth.crearLimitador();
   const ia = crearIA(opciones.ia, { fetch: opciones.fetchIA, avisar: opciones.avisarIA });
   const segura = Boolean(opciones.cookieSegura);
 
@@ -82,7 +84,7 @@ async function crearApp(opciones) {
   const RUTAS = [
     ['GET', /^\/api\/config$/, 'nada', function () { return { demo: demo }; }],
     ['POST', /^\/api\/registro$/, 'nada', async function (c) {
-      const r = await auth.registrar(base, c.cuerpo);
+      const r = await auth.registrar(base, c.cuerpo, ahora());
       const token = await auth.crearSesion(base, r.usuarioId, r.negocioId);
       c.cookie = cookieSesion(token, segura);
       c.estado = 201;
@@ -109,6 +111,32 @@ async function crearApp(opciones) {
     ['POST', /^\/api\/sesion\/negocio$/, 'sesion', async function (c) {
       await auth.elegirNegocio(base, c.sesion, Number(c.cuerpo.negocioId));
       return estadoSesion(await auth.leerSesion(base, c.token));
+    }],
+    ['POST', /^\/api\/invitaciones\/aceptar$/, 'sesion', async function (c) {
+      // Se limita por usuario, no por IP: en un negocio todos salen a internet por la misma.
+      const quien = String(c.sesion.usuario.id);
+      limitadorCodigos.revisar(quien);
+      let r;
+      try { r = await auth.aceptarInvitacion(base, c.cuerpo.codigo, c.sesion.usuario.id, ahora()); }
+      catch (e) { if (e.estado === 404) { limitadorCodigos.fallo(quien); } throw e; }
+      limitadorCodigos.exito(quien);
+      // Si no estaba trabajando en ningún negocio, queda en el que acaba de entrar.
+      const sesion = await auth.leerSesion(base, c.token);
+      if (!sesion.negocio) { await auth.elegirNegocio(base, sesion, r.negocioId); }
+      return estadoSesion(await auth.leerSesion(base, c.token));
+    }],
+    ['GET', /^\/api\/equipo$/, 'dueno', function (c) { return auth.equipo(base, c.negocioId, ahora()); }],
+    ['POST', /^\/api\/equipo\/invitaciones$/, 'dueno', function (c) {
+      c.estado = 201;
+      return auth.crearInvitacion(base, c.negocioId, c.sesion.usuario.id, c.cuerpo.rol, ahora());
+    }],
+    ['DELETE', /^\/api\/equipo\/invitaciones\/(\d+)$/, 'dueno', async function (c) {
+      await auth.cancelarInvitacion(base, c.negocioId, Number(c.params[1]));
+      return { ok: true };
+    }],
+    ['DELETE', /^\/api\/equipo\/miembros\/(\d+)$/, 'dueno', async function (c) {
+      await auth.quitarMiembro(base, c.negocioId, Number(c.params[1]), c.sesion.usuario.id);
+      return { ok: true };
     }],
     ['GET', /^\/api\/productos$/, 'negocio', function (c) {
       return inv.listarProductos(base, c.negocioId, c.url.searchParams.get('inactivos') === '1');

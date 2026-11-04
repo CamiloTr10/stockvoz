@@ -85,21 +85,26 @@ async function elegirNegocio(db, sesion, negocioId) {
   await db.query('UPDATE sesiones SET negocio_id = $1 WHERE token_hash = $2', [negocioId, sesion.tokenHash]);
 }
 
-// Crea negocio + usuario dueño en una sola transacción.
-async function registrar(db, datos) {
-  const negocio = texto(datos.negocio, 'El nombre del negocio', 2, 80);
+// Crea negocio + usuario dueño, o une al usuario nuevo a un negocio con un código de invitación.
+async function registrar(db, datos, ahoraDado) {
+  const conCodigo = typeof datos.codigo === 'string' && datos.codigo.trim() !== '';
+  const negocio = conCodigo ? null : texto(datos.negocio, 'El nombre del negocio', 2, 80);
   const nombre = texto(datos.nombre, 'Tu nombre', 2, 80);
   const correo = validarCorreo(datos.correo);
   const clave = typeof datos.clave === 'string' ? datos.clave : '';
   if (clave.length < 8 || clave.length > 200) { throw new ErrorApi(400, 'La contraseña debe tener al menos 8 caracteres.'); }
   const yaExiste = new ErrorApi(409, 'Ya existe una cuenta con ese correo.');
   if (await uno(db, 'SELECT 1 FROM usuarios WHERE correo = $1', [correo])) { throw yaExiste; }
-  const ahora = new Date();
+  const ahora = ahoraDado || new Date();
   try {
     return await transaccion(db, async function (t) {
-      const negocioId = (await uno(t, 'INSERT INTO negocios (nombre, creado_en) VALUES ($1, $2) RETURNING id', [negocio, ahora])).id;
       const usuarioId = (await uno(t, 'INSERT INTO usuarios (nombre, correo, clave_hash, creado_en) VALUES ($1, $2, $3, $4) RETURNING id',
         [nombre, correo, hashClave(clave), ahora])).id;
+      if (conCodigo) {
+        const r = await consumirInvitacion(t, datos.codigo, usuarioId, ahora);
+        return { usuarioId: usuarioId, negocioId: r.negocioId };
+      }
+      const negocioId = (await uno(t, 'INSERT INTO negocios (nombre, creado_en) VALUES ($1, $2) RETURNING id', [negocio, ahora])).id;
       await t.query('INSERT INTO membresias (usuario_id, negocio_id, rol) VALUES ($1, $2, $3)', [usuarioId, negocioId, 'dueno']);
       return { usuarioId: usuarioId, negocioId: negocioId };
     });
@@ -107,6 +112,79 @@ async function registrar(db, datos) {
     // Dos registros simultáneos con el mismo correo: la base rechaza el segundo.
     throw esDuplicado(e) ? yaExiste : e;
   }
+}
+
+/* ---------- Invitaciones al equipo ---------- */
+
+// Sin I, L, O, 0 ni 1: se confunden al dictar el código por teléfono o escribirlo a mano.
+const ALFABETO_CODIGO = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const LARGO_CODIGO = 8;
+const DURACION_INVITACION_MS = 7 * 24 * 60 * 60 * 1000;
+const ROLES = ['dueno', 'encargado'];
+
+function generarCodigo() {
+  let c = '';
+  for (let i = 0; i < LARGO_CODIGO; i++) { c += ALFABETO_CODIGO[crypto.randomInt(ALFABETO_CODIGO.length)]; }
+  return c.slice(0, 4) + '-' + c.slice(4);   // se muestra como ABCD-EFGH, más fácil de leer
+}
+
+function normalizarCodigo(valor) {
+  return String(valor === null || valor === undefined ? '' : valor).toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+// Devuelve el código en claro una sola vez: en la base solo queda su hash.
+async function crearInvitacion(db, negocioId, usuarioId, rol, ahoraDado) {
+  if (ROLES.indexOf(rol) === -1) { throw new ErrorApi(400, 'El rol debe ser dueno o encargado.'); }
+  const ahora = ahoraDado || new Date();
+  const codigo = generarCodigo();
+  const fila = await uno(db, 'INSERT INTO invitaciones (codigo_hash, negocio_id, rol, creada_por, creada_en, expira_en) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, expira_en',
+    [hashToken(normalizarCodigo(codigo)), negocioId, rol, usuarioId, ahora, new Date(ahora.getTime() + DURACION_INVITACION_MS)]);
+  return { id: fila.id, codigo: codigo, rol: rol, expiraEn: fila.expira_en };
+}
+
+// Valida el código y añade la membresía. `t` debe ser el cliente de una transacción.
+async function consumirInvitacion(t, codigo, usuarioId, ahora) {
+  const invalido = new ErrorApi(404, 'Ese código no sirve: puede estar mal escrito, ya usado o vencido. Pídele uno nuevo al dueño.');
+  const normalizado = normalizarCodigo(codigo);
+  if (normalizado.length !== LARGO_CODIGO) { throw invalido; }
+  // Se bloquea la fila: dos personas con el mismo código no pueden usarlo a la vez.
+  const inv = await uno(t, 'SELECT * FROM invitaciones WHERE codigo_hash = $1 FOR UPDATE', [hashToken(normalizado)]);
+  if (!inv || inv.usada_en || inv.expira_en <= ahora) { throw invalido; }
+  if (await uno(t, 'SELECT 1 FROM membresias WHERE usuario_id = $1 AND negocio_id = $2', [usuarioId, inv.negocio_id])) {
+    throw new ErrorApi(409, 'Ya haces parte de ese negocio.');   // el código no se gasta
+  }
+  await t.query('UPDATE invitaciones SET usada_en = $1, usada_por = $2 WHERE id = $3', [ahora, usuarioId, inv.id]);
+  await t.query('INSERT INTO membresias (usuario_id, negocio_id, rol) VALUES ($1, $2, $3)', [usuarioId, inv.negocio_id, inv.rol]);
+  return { negocioId: inv.negocio_id, rol: inv.rol };
+}
+
+// Une a quien ya tiene cuenta a otro negocio.
+function aceptarInvitacion(db, codigo, usuarioId, ahoraDado) {
+  const ahora = ahoraDado || new Date();
+  return transaccion(db, function (t) { return consumirInvitacion(t, codigo, usuarioId, ahora); });
+}
+
+// Miembros del negocio y las invitaciones que siguen sirviendo. El código nunca se devuelve:
+// solo se ve una vez, al crearlo.
+async function equipo(db, negocioId, ahoraDado) {
+  const ahora = ahoraDado || new Date();
+  return {
+    miembros: await todos(db, 'SELECT u.id, u.nombre, u.correo, m.rol FROM membresias m JOIN usuarios u ON u.id = m.usuario_id WHERE m.negocio_id = $1 ORDER BY m.rol, lower(u.nombre)', [negocioId]),
+    invitaciones: await todos(db, 'SELECT id, rol, creada_en AS "creadaEn", expira_en AS "expiraEn" FROM invitaciones WHERE negocio_id = $1 AND usada_en IS NULL AND expira_en > $2 ORDER BY creada_en DESC', [negocioId, ahora])
+  };
+}
+
+async function cancelarInvitacion(db, negocioId, id) {
+  const r = await db.query('DELETE FROM invitaciones WHERE id = $1 AND negocio_id = $2 AND usada_en IS NULL', [id, negocioId]);
+  if (!r.rowCount) { throw new ErrorApi(404, 'Esa invitación no existe o ya se usó.'); }
+}
+
+// Quitar a alguien del negocio borra su membresía; su sesión deja de ver este negocio sola
+// (leerSesion solo acepta negocios en los que sigue siendo miembro).
+async function quitarMiembro(db, negocioId, usuarioId, quienPide) {
+  if (usuarioId === quienPide) { throw new ErrorApi(409, 'No puedes quitarte a ti mismo del negocio. Así siempre queda al menos un dueño.'); }
+  const r = await db.query('DELETE FROM membresias WHERE usuario_id = $1 AND negocio_id = $2', [usuarioId, negocioId]);
+  if (!r.rowCount) { throw new ErrorApi(404, 'Esa persona no pertenece a este negocio.'); }
 }
 
 // Limita intentos fallidos por correo + IP para frenar ataques de fuerza bruta.
@@ -145,5 +223,6 @@ async function autenticar(db, correoCrudo, clave) {
 
 module.exports = {
   hashClave, autenticar, registrar, crearSesion, leerSesion, cerrarSesion, elegirNegocio,
-  negociosDe, crearLimitador, DURACION_SESION_MS
+  negociosDe, crearLimitador, DURACION_SESION_MS,
+  crearInvitacion, aceptarInvitacion, equipo, cancelarInvitacion, quitarMiembro, normalizarCodigo
 };
