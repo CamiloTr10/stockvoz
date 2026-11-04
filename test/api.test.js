@@ -16,7 +16,7 @@ test.before(async function () {
   assert.match(new URL(url).pathname, /_prueba$/, 'La base de pruebas debe llamarse algo_prueba.');
   const c = new Client({ connectionString: url });
   await c.connect();
-  await c.query('DROP TABLE IF EXISTS movimientos, productos, sesiones, membresias, usuarios, negocios');
+  await c.query('DROP TABLE IF EXISTS movimientos, productos, sesiones, membresias, usuarios, negocios, migraciones');
   await c.end();
   servidor = await crearApp({ urlDb: url, demo: true });
   await new Promise(function (r) { servidor.listen(0, '127.0.0.1', function () { base = 'http://127.0.0.1:' + servidor.address().port; r(); }); });

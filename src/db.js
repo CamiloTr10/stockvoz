@@ -1,74 +1,61 @@
 'use strict';
 // Acceso a datos en PostgreSQL. Las funciones de auth.js e inventario.js reciben `db`, que puede
 // ser el pool o el cliente de una transacción: ambos tienen .query().
+const fs = require('node:fs');
+const path = require('node:path');
 const { Pool, types } = require('pg');
+
+const CARPETA_MIGRACIONES = path.join(__dirname, '..', 'migraciones');
+// Identifica el candado que impide que dos procesos migren a la vez.
+const CANDADO_MIGRACIONES = 5170001;
 
 // COUNT y SUM devuelven bigint, que pg entrega como texto; los montos del negocio caben en Number.
 types.setTypeParser(types.builtins.INT8, Number);
 // Las fechas del calendario se usan como texto "2026-10-31", sin pasar por zonas horarias.
 types.setTypeParser(types.builtins.DATE, function (v) { return v; });
 
-const ESQUEMA = `
-CREATE TABLE IF NOT EXISTS negocios (
-  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  nombre text NOT NULL,
-  creado_en timestamptz NOT NULL
-);
-CREATE TABLE IF NOT EXISTS usuarios (
-  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  nombre text NOT NULL,
-  correo text NOT NULL UNIQUE,
-  clave_hash text NOT NULL,
-  creado_en timestamptz NOT NULL
-);
--- Un usuario puede trabajar en varios negocios con un rol distinto en cada uno.
-CREATE TABLE IF NOT EXISTS membresias (
-  usuario_id integer NOT NULL REFERENCES usuarios(id),
-  negocio_id integer NOT NULL REFERENCES negocios(id),
-  rol text NOT NULL CHECK (rol IN ('dueno', 'encargado')),
-  PRIMARY KEY (usuario_id, negocio_id)
-);
-CREATE TABLE IF NOT EXISTS sesiones (
-  token_hash text PRIMARY KEY,
-  usuario_id integer NOT NULL REFERENCES usuarios(id),
-  negocio_id integer REFERENCES negocios(id),
-  expira_en bigint NOT NULL
-);
-CREATE TABLE IF NOT EXISTS productos (
-  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  negocio_id integer NOT NULL REFERENCES negocios(id),
-  nombre text NOT NULL,
-  precio integer NOT NULL DEFAULT 0 CHECK (precio >= 0),
-  stock integer NOT NULL DEFAULT 0 CHECK (stock >= 0),
-  stock_minimo integer NOT NULL DEFAULT 0 CHECK (stock_minimo >= 0),
-  activo boolean NOT NULL DEFAULT true
-);
--- "Pan tajado" y "pan tajado" son el mismo producto dentro de un negocio.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_productos_negocio_nombre ON productos (negocio_id, lower(nombre));
--- El stock solo cambia por movimientos: cada fila deja rastro de quién, cuándo y desde qué frase.
-CREATE TABLE IF NOT EXISTS movimientos (
-  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  negocio_id integer NOT NULL REFERENCES negocios(id),
-  producto_id integer NOT NULL REFERENCES productos(id),
-  usuario_id integer REFERENCES usuarios(id),
-  tipo text NOT NULL CHECK (tipo IN ('venta', 'entrada', 'merma')),
-  cantidad integer NOT NULL CHECK (cantidad > 0),
-  precio_unitario integer NOT NULL,
-  stock_resultante integer NOT NULL,
-  origen text NOT NULL CHECK (origen IN ('voz', 'texto', 'manual', 'inicial')),
-  texto_original text,
-  fecha_local date NOT NULL,
-  creado_en timestamptz NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_movimientos_negocio_fecha ON movimientos (negocio_id, fecha_local);
-`;
+// Archivos NNN_nombre.sql de la carpeta, en orden. El número es la versión y no puede repetirse.
+function leerMigraciones(carpeta) {
+  const lista = fs.readdirSync(carpeta).filter(function (f) { return /^\d+_.+\.sql$/.test(f); }).sort()
+    .map(function (f) { return { version: parseInt(f, 10), nombre: f, sql: fs.readFileSync(path.join(carpeta, f), 'utf8') }; });
+  lista.forEach(function (m, i) {
+    if (i > 0 && m.version === lista[i - 1].version) { throw new Error('Dos migraciones con la versión ' + m.version + '.'); }
+  });
+  return lista;
+}
 
-// Abre el pool y crea las tablas que falten.
+// Aplica las migraciones que faltan, cada una en su propia transacción: si una falla, no deja
+// nada a medias y las siguientes no corren. Una migración ya aplicada nunca se vuelve a ejecutar.
+async function migrar(pool, carpeta) {
+  const cliente = await pool.connect();
+  try {
+    await cliente.query('SELECT pg_advisory_lock($1)', [CANDADO_MIGRACIONES]);
+    await cliente.query('CREATE TABLE IF NOT EXISTS migraciones (version integer PRIMARY KEY, nombre text NOT NULL, aplicada_en timestamptz NOT NULL DEFAULT now())');
+    const hechas = new Set((await cliente.query('SELECT version FROM migraciones')).rows.map(function (r) { return r.version; }));
+    for (const m of leerMigraciones(carpeta || CARPETA_MIGRACIONES)) {
+      if (hechas.has(m.version)) { continue; }
+      await cliente.query('BEGIN');
+      try {
+        await cliente.query(m.sql);
+        await cliente.query('INSERT INTO migraciones (version, nombre) VALUES ($1, $2)', [m.version, m.nombre]);
+        await cliente.query('COMMIT');
+      } catch (e) {
+        await cliente.query('ROLLBACK').catch(function () {});
+        throw new Error('Falló la migración ' + m.nombre + ': ' + e.message);
+      }
+    }
+  } finally {
+    await cliente.query('SELECT pg_advisory_unlock($1)', [CANDADO_MIGRACIONES]).catch(function () {});
+    cliente.release();
+  }
+}
+
+// Abre el pool y aplica las migraciones pendientes.
 async function abrir(url) {
   if (!url) { throw new Error('Falta DATABASE_URL. Copia .env.example como .env y complétalo.'); }
   const pool = new Pool({ connectionString: url });
   try {
-    await pool.query(ESQUEMA);
+    await migrar(pool);
   } catch (e) {
     await pool.end();
     throw e;
@@ -105,4 +92,4 @@ function esDuplicado(e) {
   return e && e.code === '23505';
 }
 
-module.exports = { abrir, uno, todos, transaccion, esDuplicado };
+module.exports = { abrir, migrar, leerMigraciones, CARPETA_MIGRACIONES, uno, todos, transaccion, esDuplicado };

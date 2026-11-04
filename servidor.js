@@ -4,9 +4,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-
-// Lee .env si existe. Las variables ya definidas en el sistema tienen prioridad.
-try { process.loadEnvFile(path.join(__dirname, '.env')); } catch (e) { if (e.code !== 'ENOENT') { throw e; } }
+require('./src/entorno');
 
 const db = require('./src/db');
 const auth = require('./src/auth');

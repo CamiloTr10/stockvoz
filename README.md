@@ -24,7 +24,7 @@ CREATE DATABASE stockvoz_prueba OWNER stockvoz ENCODING 'UTF8' TEMPLATE template
 ```
 
 `\password` pide la contraseña sin mostrarla y sin dejarla en el historial.
-Las tablas las crea la aplicación al arrancar.
+Las tablas las crea la aplicación al arrancar, aplicando las migraciones de `migraciones/` (ver más abajo).
 
 ### 2. Configurar y arrancar
 
@@ -70,9 +70,18 @@ cd stockvoz
 node --test
 ```
 
-40 pruebas: el intérprete de frases (21 casos) y la API de punta a punta (aislamiento entre negocios,
+44 pruebas: el intérprete de frases (21 casos), las migraciones (4) y la API de punta a punta (aislamiento entre negocios,
 roles, stock insuficiente, ventas simultáneas, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
-Las de la API usan `DATABASE_URL_PRUEBA` y se niegan a correr si esa base no termina en `_prueba`.
+Las que usan la base lo hacen sobre `DATABASE_URL_PRUEBA` y se niegan a correr si esa base no termina en `_prueba`.
+
+## Migraciones de la base de datos
+
+Los cambios al esquema viven en `migraciones/`, un archivo por cambio: `001_esquema_inicial.sql`, `002_...sql`, etc.
+Al arrancar, la aplicación aplica en orden las que faltan y deja registro en la tabla `migraciones`.
+
+- Para cambiar el esquema, **crea un archivo nuevo** con el siguiente número. **Nunca edites uno ya aplicado**: en las bases que ya lo corrieron no se repetiría.
+- Cada migración corre en una transacción: si falla, no queda nada a medias y la aplicación no arranca.
+- Si dos procesos arrancan a la vez, un candado hace que uno espere al otro.
 
 En GitHub corren solas en cada push y pull request (GitHub Actions, `.github/workflows/pruebas.yml`),
 contra un PostgreSQL 17 temporal. El resultado aparece en la pestaña **Actions** del repositorio.
@@ -83,11 +92,13 @@ contra un PostgreSQL 17 temporal. El resultado aparece en la pestaña **Actions*
 stockvoz/
 ├── docs/              Documentación del proyecto (wireframes v1)
 ├── servidor.js          Servidor HTTP: rutas de la API, sesión por cookie y archivos de public/
+├── migraciones/         Cambios del esquema de PostgreSQL, numerados (001_..., 002_...)
 ├── src/
 │   ├── interprete.js    Frase en español → operación propuesta (tipo, producto, cantidad)
 │   ├── inventario.js    Reglas del inventario: productos, movimientos, panel y reportes
 │   ├── auth.js          Cuentas, contraseñas (scrypt), sesiones y límite de intentos
-│   ├── db.js            Esquema de PostgreSQL, pool de conexiones y transacciones
+│   ├── db.js            Pool de PostgreSQL, migraciones y transacciones
+│   ├── entorno.js       Lectura del archivo .env
 │   ├── demo.js          Datos de demostración
 │   └── errores.js       Error con código HTTP
 ├── public/              Interfaz: index.html, app.css, app.js (JavaScript nativo)
@@ -140,14 +151,13 @@ Todas las rutas responden JSON. Las de inventario usan siempre el negocio de la 
 
 | Hoy | Por qué | Siguiente paso |
 |---|---|---|
-| Esquema creado al arrancar (`CREATE TABLE IF NOT EXISTS`) | Basta mientras el esquema no cambie | Migraciones versionadas cuando haya datos reales que conservar |
 | Intérprete por reglas | Funciona sin claves de API ni costos y es fácil de probar | Conectar el modelo de IA mediante **n8n**, devolviendo el mismo formato que `interpretar()` |
 | Web Speech API del navegador | Dictado gratis en Chrome/Edge | Procesar audio en el servidor (por ejemplo Whisper) si se necesita en otros navegadores o en WhatsApp |
 | Una operación por frase | Suficiente para el MVP | Frases compuestas («vendí 3 y se dañaron 2») |
 
 ## Qué sigue, por rol del equipo
 
-- **Backend y base de datos (Gabriel):** revisar el esquema de PostgreSQL de `db.js` y definir migraciones versionadas; revisar la estrategia multi-tenant (filtrado por `negocio_id` en todas las consultas, o Row Level Security).
+- **Backend y base de datos (Gabriel):** revisar el esquema de `migraciones/001_esquema_inicial.sql`; revisar la estrategia multi-tenant (filtrado por `negocio_id` en todas las consultas, o Row Level Security).
 - **IA y automatización (Nicolás):** flujo en n8n que reciba el texto, llame al modelo de lenguaje y devuelva `{estado, tipo, producto, cantidad}`; usar las pruebas de `test/interprete.test.js` como casos de evaluación.
 - **Frontend (Camilo):** convertir la interfaz en PWA instalable y probar con usuarios reales desde el celular.
 - **UX y documentación (David):** pruebas de usabilidad con tenderos usando las cuentas demo; documentar los hallazgos de la investigación de usuarios y ajustar los textos de error.
