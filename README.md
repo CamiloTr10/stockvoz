@@ -145,6 +145,9 @@ Las instrucciones y el esquema que recibe el modelo están en `src/ia-instruccio
 para que el flujo de n8n y el modo directo usen exactamente lo mismo. En los dos modos:
 
 - **La IA solo propone.** El backend valida la respuesta: solo acepta productos del catálogo del propio negocio, cantidades válidas y campos coherentes con el estado. Después el usuario confirma y `POST /api/movimientos` guarda, igual que siempre.
+- **Diminutivos y aumentativos.** «Gaseositas», «borradorcitos», «arrocito», «gaseosotas»: el tendero
+  los usa todo el tiempo y no cambian el producto. Las reglas los resuelven quitando el afijo y
+  probando la palabra base (`basesPosibles` en `src/interprete.js`); al modelo además se le dice.
 - **Varias operaciones en una frase.** «Vendí 2 borradores y compré 3 lápices» son dos operaciones, y se muestran como dos filas que el usuario revisa, corrige o quita antes de confirmar. Se guardan de a una y en orden: si una no cabe en el stock, las demás sí se guardan y se dice cuál falló y por qué. El diseño y por qué se decidió así están en [docs/diseno-varias-operaciones.md](docs/diseno-varias-operaciones.md).
 - **Respaldo:** si el proveedor está caído, tarda más de `N8N_TIMEOUT_MS`, responde un error, devuelve algo inválido, se acaba su cuota o el negocio llegó a su límite diario, se usan las reglas y la interfaz sigue funcionando. La respuesta indica `fuente` (`ia` o `reglas`) y, si hubo respaldo, `motivoRespaldo`.
 - **Formato garantizado:** con Groq se envía el esquema con `strict: true`, así que el modelo no puede responder otra cosa. Con proveedores que no lo admitan se usa `IA_ESQUEMA_ESTRICTO=0` y la validación del backend hace el resto.
@@ -208,15 +211,20 @@ Groq con `openai/gpt-oss-20b`, esquema estricto y `IA_ESFUERZO=low`:
 | Números en letras | 57 % | **100 %** |
 | Errores de dictado | 57 % | **100 %** |
 | Nombres de producto | 100 % | 100 % |
-| Varias operaciones en una frase | — | **100 %** |
+| Varias operaciones en una frase | 86 % | **100 %** |
+| Diminutivos y aumentativos | 80 % | sin medir |
 | **Total** | **85 %** | **97 %** |
 
 Tiempo por frase: mediana 751 ms, p95 1,3 s (el límite antes del respaldo son 6 s), medido por el flujo de n8n.
 
-El 97 % son 60 de 62 frases. Los dos fallos de esa corrida (no marcar como ambigua una «gaseosa»
-cuando hay dos en el catálogo, y leer «quedé sin arroz» como una pregunta) se corrigieron después
-afinando las instrucciones, y esas frases ya pasan. **Falta volver a correr el banco completo con
-las instrucciones finales**: se acabó el cupo diario de Groq (200.000 tokens) a mitad de la corrida.
+El 97 % son 60 de 62 frases, medido antes de que el banco creciera a 72. Los dos fallos de esa
+corrida (no marcar como ambigua una «gaseosa» cuando hay dos en el catálogo, y leer «quedé sin
+arroz» como una pregunta) se corrigieron después afinando las instrucciones, y esas frases ya pasan.
+
+**Falta volver a correr el banco completo, ahora de 72 frases, con las instrucciones finales.** Se
+acabó el cupo diario de Groq (200.000 tokens) y las diez frases con diminutivos **todavía no se han
+medido con IA**: la única que alcanzó a pasar por el modelo, «vendí dos gaseositas de 400», salió
+bien, pero una golondrina no hace verano.
 Gasto: unos 900 tokens por frase, así que los 200.000 diarios del plan gratuito dan para unas 220 frases,
 o sea unas tres corridas del banco completo por día. Pasado ese tope, Groq responde 429 y todo cae al
 respaldo por reglas: la app sigue funcionando, pero ya no es la IA la que interpreta.
@@ -344,6 +352,7 @@ tenga cuenta o no.
 | Intérprete por reglas como respaldo, y la IA vía n8n (`STOCKVOZ_IA=n8n`) | La app de un tendero no puede dejar de funcionar porque se cayó un proveedor | Rehacer el banco con frases grabadas a tenderos reales |
 | Transcripción con Whisper en el servidor, y la Web Speech API como respaldo | Funciona en cualquier navegador y el audio no pasa por Google | Medir qué tan bien transcribe a tenderos reales, con grabaciones de verdad |
 | El intérprete por reglas no separa frases con el verbo omitido («vendí 2 panes y 3 leches») | Juntar de más es preferible a separar mal, que inventaría operaciones | Heredar el verbo del pedazo anterior sin confundirlo con los números compuestos |
+| Las reglas toman como cantidad un número que es parte del nombre del producto: «vendí dos gaseosas de 400» da 400, no 2 | Viene de preferir los dígitos a los números en letras, que acierta casi siempre | Saltarse los dígitos que aparecen en algún nombre del catálogo, midiendo que no rompa «vendí 500 de arroz» |
 | El nodo HTTP de n8n no bloquea redirecciones, el modo directo sí | La URL es fija, el riesgo es bajo | Igualarlo al modo directo |
 
 El calendario completo hasta la sustentación, con riesgos y plan B del demo, está en

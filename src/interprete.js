@@ -44,9 +44,41 @@ function tokens(texto) {
 }
 
 // "panes" ~ "pan", "leches" ~ "leche", "gaseosas" ~ "gaseosa", "arroces" ~ "arroz"
-function equivalen(a, b) {
+function mismaPalabra(a, b) {
   return a === b || a === b + 's' || a === b + 'es' || b === a + 's' || b === a + 'es' ||
     (/z$/.test(b) && a === b.slice(0, -1) + 'ces') || (/z$/.test(a) && b === a.slice(0, -1) + 'ces');
+}
+
+// Diminutivos y aumentativos, que el tendero usa todo el tiempo: "gaseositas" es gaseosa,
+// "borradorcitos" son borradores, "arrocito" es arroz, "gaseosotas" también es gaseosa.
+// Solo terminados en -o/-a: así "paquete" o "billete" no se confunden con un aumentativo.
+const AFIJOS = /^(.+?)(ec|c)?(it|ic|ill|ot|az)([oa]s?)$/;
+
+// Devuelve las palabras base que podría tener una palabra con diminutivo o aumentativo.
+// No decide nada: solo propone candidatas, y mismaPalabra() dice si alguna sirve.
+function basesPosibles(palabra) {
+  const m = AFIJOS.exec(palabra);
+  if (!m) { return []; }
+  // La "c" puede ser del diminutivo ("pancito" es pan) o de la palabra ("arrocito" es arroz),
+  // así que se prueban las dos lecturas.
+  const raices = m[2] ? [m[1], m[1] + m[2]] : [m[1]];
+  const bases = [];
+  raices.forEach(function (r) {
+    // Una raíz de una o dos letras produce parecidos que no son tales.
+    if (r.length < 3) { return; }
+    const variantes = [r];
+    if (/c$/.test(r)) { variantes.push(r.slice(0, -1) + 'z'); }   // arrocito → arroz
+    if (/gu$/.test(r)) { variantes.push(r.slice(0, -1)); }        // manguito → mango
+    variantes.forEach(function (v) { bases.push(v, v + 'o', v + 'a', v + 'e'); });
+  });
+  return bases;
+}
+
+// `a` es lo que dijo el tendero y `b` una palabra del nombre del producto. Solo se le buscan
+// diminutivos a lo que dijo el tendero, no al catálogo.
+function equivalen(a, b) {
+  if (mismaPalabra(a, b)) { return true; }
+  return basesPosibles(a).some(function (base) { return mismaPalabra(base, b); });
 }
 
 // Si hay varios verbos de movimiento gana el primero de la frase; la consulta

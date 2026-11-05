@@ -860,6 +860,146 @@
           "producto": null
         }
       ]
+    },
+    {
+      "categoria": "diminutivos",
+      "texto": "entraron unos panecitos, como diez",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "entrada",
+          "cantidad": 10,
+          "producto": 3
+        }
+      ],
+      "regresion": true
+    },
+    {
+      "categoria": "diminutivos",
+      "texto": "se me dañaron tres huevitos",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "merma",
+          "cantidad": 3,
+          "producto": 4
+        }
+      ],
+      "regresion": true
+    },
+    {
+      "categoria": "diminutivos",
+      "texto": "vendí un arrocito",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "venta",
+          "cantidad": 1,
+          "producto": 5
+        }
+      ],
+      "regresion": true
+    },
+    {
+      "categoria": "diminutivos",
+      "texto": "llegaron 6 lechitas",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "entrada",
+          "cantidad": 6,
+          "producto": 6
+        }
+      ],
+      "regresion": true
+    },
+    {
+      "categoria": "diminutivos",
+      "texto": "vendí 3 botellitas de agua",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "venta",
+          "cantidad": 3,
+          "producto": 8
+        }
+      ],
+      "regresion": true
+    },
+    {
+      "categoria": "diminutivos",
+      "texto": "vendí dos panecillos",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "venta",
+          "cantidad": 2,
+          "producto": 3
+        }
+      ],
+      "regresion": true
+    },
+    {
+      "categoria": "diminutivos",
+      "texto": "vendí dos camisetiticas talla eme",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "venta",
+          "cantidad": 2,
+          "producto": 7
+        }
+      ],
+      "regresion": true
+    },
+    {
+      "categoria": "diminutivos",
+      "texto": "vendí dos panecitos y compré cuatro huevitos y se me dañaron unas tres lechitas",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "venta",
+          "cantidad": 2,
+          "producto": 3
+        },
+        {
+          "estado": "ok",
+          "tipo": "entrada",
+          "cantidad": 4,
+          "producto": 4
+        },
+        {
+          "estado": "ok",
+          "tipo": "merma",
+          "cantidad": 3,
+          "producto": 6
+        }
+      ],
+      "regresion": true
+    },
+    {
+      "categoria": "diminutivos",
+      "texto": "vendí dos gaseositas de 400",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "venta",
+          "cantidad": 2,
+          "producto": 2
+        }
+      ]
+    },
+    {
+      "categoria": "diminutivos",
+      "texto": "me llegaron unas gaseosotas de litro y medio, cinco",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "entrada",
+          "cantidad": 5,
+          "producto": 1
+        }
+      ]
     }
   ]
 }
