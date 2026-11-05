@@ -1,6 +1,6 @@
 # Contrato entre StockVoz y n8n
 
-Cuando `STOCKVOZ_IA=1`, `POST /api/interpretar` le pasa la frase a un webhook de n8n, que consulta
+Cuando `STOCKVOZ_IA=n8n`, `POST /api/interpretar` le pasa la frase a un webhook de n8n, que consulta
 un modelo de lenguaje y devuelve la interpretación. Este documento define lo que n8n recibe y lo que
 debe responder. La implementación del lado del backend está en `src/ia.js`.
 

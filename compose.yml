@@ -1,0 +1,27 @@
+# n8n para desarrollo: el traductor entre StockVoz y el modelo de lenguaje.
+# Se levanta con `docker compose up -d` y queda en http://localhost:5678
+# La versión va fija a propósito: todos en el equipo corren la misma.
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.46.6
+    container_name: stockvoz-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      GENERIC_TIMEZONE: America/Bogota
+      TZ: America/Bogota
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      N8N_DIAGNOSTICS_ENABLED: "false"       # no mandar telemetría
+      # El flujo lee el secreto y la clave de Groq del entorno, no de dentro del flujo:
+      # así los secretos viven en un solo sitio, el .env que ya está en .gitignore,
+      # y el flujo exportado se puede subir al repositorio sin peligro.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      N8N_SECRETO: ${N8N_SECRETO:?falta N8N_SECRETO en .env}
+      IA_CLAVE: ${IA_CLAVE:?falta IA_CLAVE en .env}
+    volumes:
+      - n8n_datos:/home/node/.n8n
+
+volumes:
+  n8n_datos:

@@ -114,6 +114,34 @@ para que el flujo de n8n y el modo directo usen exactamente lo mismo. En los dos
 - **Privacidad:** a n8n solo viajan la frase y los `id` y nombres de los productos del negocio. Sin precios, stock ni datos de personas.
 - El formato exacto que debe recibir y devolver el flujo está en [docs/contrato-n8n.md](docs/contrato-n8n.md).
 
+### Levantar n8n en local
+
+El flujo de n8n **no se arma a mano**: se genera desde `src/ia-instrucciones.js`, para que el modo
+directo y el flujo le manden exactamente lo mismo al modelo.
+
+```bash
+docker compose up -d              # n8n 2.46.6 en http://localhost:5678
+npm run flujo                     # regenera n8n/flujo-stockvoz.json
+```
+
+Para cargarlo en n8n, con el contenedor arriba:
+
+```bash
+docker cp n8n/flujo-stockvoz.json stockvoz-n8n:/tmp/flujo.json
+docker exec stockvoz-n8n n8n import:workflow --input=/tmp/flujo.json
+docker exec stockvoz-n8n n8n publish:workflow --id=stockvozinterpreta
+docker compose restart n8n
+```
+
+La primera vez hay que **crear la cuenta de dueño** en <http://localhost:5678>: hasta que exista,
+n8n no registra los webhooks de producción y el flujo responde 404. Es una cuenta local, vive solo
+en tu máquina.
+
+**Los secretos nunca entran al flujo.** `compose.yml` le pasa `N8N_SECRETO` e `IA_CLAVE` al
+contenedor desde el `.env` (que está en `.gitignore`), y el flujo los lee con `$env`. Por eso
+`n8n/flujo-stockvoz.json` se puede subir al repositorio sin peligro; `test/flujo-n8n.test.js`
+lo comprueba en cada corrida.
+
 **Medir un intérprete.** `evaluacion/casos.json` es el banco de frases con su resultado esperado, agrupadas por categoría
 (coloquial, números en letras, errores de dictado…). Son frases propuestas: hay que reemplazarlas y ampliarlas con frases reales de tenderos.
 
@@ -153,6 +181,7 @@ problema está resuelto. El banco hay que rehacerlo con frases grabadas de verda
 ```
 stockvoz/
 ├── docs/              Documentación del proyecto (wireframes v1) y contrato con n8n
+├── n8n/               Generador del flujo (generar-flujo.js) y el flujo listo para importar
 ├── evaluacion/          Banco de frases (casos.json) y script npm run evaluar
 ├── servidor.js          Servidor HTTP: rutas de la API, sesión por cookie y archivos de public/
 ├── migraciones/         Cambios del esquema de PostgreSQL, numerados (001_..., 002_...)

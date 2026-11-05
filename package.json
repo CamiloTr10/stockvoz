@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node servidor.js",
     "test": "node --test",
-    "evaluar": "node evaluacion/evaluar.js"
+    "evaluar": "node evaluacion/evaluar.js",
+    "flujo": "node n8n/generar-flujo.js"
   },
   "engines": {
     "node": ">=22.13"
