@@ -170,6 +170,8 @@ Groq con `openai/gpt-oss-20b`, esquema estricto y `IA_ESFUERZO=low`:
 | **Total** | **85 %** | **100 %** |
 
 Tiempo por frase: mediana 870 ms, p95 2,5 s (el límite antes del respaldo son 6 s).
+Medido en modo directo. Pasando por el flujo de n8n da lo mismo, 55 de 55 y cero respaldos,
+con mediana 975 ms y p95 1,8 s: el salto por n8n cuesta unos 100 ms.
 Gasto: unos 900 tokens por frase, así que los 200.000 diarios del plan gratuito dan para unas 220 frases.
 
 **Ojo con este 100 %:** las 55 frases las escribimos nosotros, no son de tenderos reales. Sirve para
