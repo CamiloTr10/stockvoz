@@ -15,7 +15,8 @@ el tendero confirma y recién ahí se guarda. Una frase puede traer varias opera
 | Interpretación por reglas (respaldo, sin conexión) | Hecho · 85 % del banco |
 | Interpretación con IA vía n8n + Groq | Hecho · 97 % del banco |
 | Varias operaciones en una frase | Hecho |
-| Dictado por voz | Web Speech API (solo Chrome/Edge, el audio pasa por Google) |
+| Dictado por voz | Whisper en el servidor, con la Web Speech API de respaldo |
+| Recolector de frases de tenderos (`#/recolectar`) | Hecho, falta usarlo |
 | 137 pruebas automáticas | Pasan |
 
 ## Lo que más puede costarnos la nota
@@ -49,7 +50,9 @@ github.com/settings/billing.
 
 - Volver a medir el banco completo con las instrucciones finales (ya está programado para el 6).
 - Desatascar la facturación de GitHub y fusionar las tres ramas abiertas a `main`.
-- Armar la herramienta para recoger frases de tenderos (ver abajo) y entregársela a David.
+- ~~Armar la herramienta para recoger frases de tenderos~~ **Hecha** el 5 de noviembre: Whisper
+  transcribe en el servidor y `#/recolectar` arma los casos. Falta entregársela a David y
+  explicarle el ciclo.
 
 ### Semana del 13 al 19 de noviembre
 
@@ -84,7 +87,9 @@ github.com/settings/billing.
 Sin esto, «grabar tenderos» se queda en buena intención. Lo que hace falta es que David pueda grabar
 una frase y que quede lista para el banco, sin tocar código.
 
-Dos piezas, en este orden:
+**Las dos piezas ya están hechas** (5 de noviembre). Lo que sigue es usarla.
+
+Lo que se construyó:
 
 1. **Transcribir con Whisper.** Groq da `whisper-large-v3-turbo` gratis con la misma cuenta que ya
    tenemos (20 peticiones por minuto, 2.000 al día). Reemplaza la Web Speech API, que solo anda en

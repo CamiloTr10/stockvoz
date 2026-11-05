@@ -145,6 +145,7 @@
     '#/equipo': vistaEquipo,
     '#/panel': vistaPanel,
     '#/registrar': vistaRegistrar,
+    '#/recolectar': vistaRecolectar,
     '#/inventario': vistaInventario,
     '#/movimientos': vistaMovimientos,
     '#/reportes': vistaReportes
@@ -510,18 +511,18 @@
   var EJEMPLOS = ['Vendí 3 gaseosas de 400', 'Entraron 24 huevos', 'Se dañaron 2 panes', '¿Cuánto queda de arroz?'];
 
   function vistaRegistrar() {
-    var Reconocimiento = window.SpeechRecognition || window.webkitSpeechRecognition;
+    var motor = motorDeVoz();
     render(
       '<h1>Registrar movimiento</h1>' +
       '<p class="sub">Di o escribe lo que pasó, revisa lo que entendió el sistema y confirma.</p>' +
       '<section class="tarjeta captura" aria-label="Captura de la instrucción">' +
-        (Reconocimiento
+        (motor
           ? '<button type="button" class="mic" id="mic" aria-pressed="false" aria-describedby="mic-ayuda">' +
               '<i class="material-icons" aria-hidden="true">mic</i><span id="mic-texto">Toca y habla</span></button>' +
             '<p class="nota" id="mic-ayuda">Por ejemplo: «Vendí 3 gaseosas de 400». Toca otra vez para terminar.</p>'
-          : '<p class="nota" id="mic-ayuda">Este navegador no permite dictar. Usa Chrome o Edge para hablar, o escribe la instrucción.</p>') +
+          : '<p class="nota" id="mic-ayuda">Este navegador no permite dictar. Escribe la instrucción.</p>') +
         '<form id="form-texto" class="fila-instruccion" novalidate>' +
-          '<label for="instruccion" class="' + (Reconocimiento ? 'visually-hidden' : '') + '">Instrucción</label>' +
+          '<label for="instruccion" class="' + (motor ? 'visually-hidden' : '') + '">Instrucción</label>' +
           '<input id="instruccion" maxlength="300" autocomplete="off" placeholder="O escribe: Se vendieron 6 panes">' +
           '<button class="btn" type="submit">Interpretar</button>' +
         '</form>' +
@@ -542,7 +543,107 @@
       b.addEventListener('click', function () { entrada.value = b.getAttribute('data-ejemplo'); interpretar(entrada.value, 'texto'); });
     });
 
-    if (Reconocimiento) { prepararVoz(Reconocimiento, entrada, function (texto) { interpretar(texto, 'voz'); }); }
+    prepararDictado(motor, entrada, function (texto) { interpretar(texto, 'voz'); });
+  }
+
+  // Cuál de los dos dictados se puede usar. Se prefiere el del servidor (Whisper): funciona en
+  // cualquier navegador y el audio no pasa por el servicio de voz del navegador. El de la Web
+  // Speech API queda como respaldo, igual que las reglas son el respaldo de la IA: si el
+  // proveedor está caído, el tendero sigue pudiendo dictar en Chrome.
+  function motorDeVoz() {
+    if (estado.config.voz && window.MediaRecorder && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      return 'servidor';
+    }
+    return (window.SpeechRecognition || window.webkitSpeechRecognition) ? 'navegador' : null;
+  }
+
+  function prepararDictado(motor, entrada, alTerminar) {
+    if (motor === 'servidor') { return prepararVozServidor(entrada, alTerminar); }
+    if (motor === 'navegador') { return prepararVoz(window.SpeechRecognition || window.webkitSpeechRecognition, entrada, alTerminar); }
+  }
+
+  // Formatos que graban los navegadores, en el orden en que los preferimos. El servidor solo
+  // acepta estos, así que si no hay ninguno no se ofrece el micrófono.
+  var FORMATOS_AUDIO = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+  // Un dictado de mostrador dura segundos. El corte evita mandar un archivo enorme si alguien
+  // deja el micrófono abierto sin darse cuenta.
+  var MAX_SEGUNDOS = 60;
+
+  // Dictado grabando el audio y transcribiéndolo en el servidor con Whisper.
+  function prepararVozServidor(entrada, alTerminar) {
+    var mic = document.getElementById('mic');
+    var etiqueta = document.getElementById('mic-texto');
+    if (!mic) { return; }
+    var grabadora = null;
+    var corte = null;
+
+    var formato = FORMATOS_AUDIO.filter(function (f) { return MediaRecorder.isTypeSupported(f); })[0];
+    if (!formato) {
+      // El navegador graba, pero en nada que el servidor acepte: mejor el dictado del navegador.
+      var Reconocimiento = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (Reconocimiento) { return prepararVoz(Reconocimiento, entrada, alTerminar); }
+      mic.disabled = true;
+      return;
+    }
+
+    function fijar(activo, texto, ocupado) {
+      mic.classList.toggle('escuchando', activo);
+      mic.setAttribute('aria-pressed', String(activo));
+      mic.disabled = Boolean(ocupado);
+      etiqueta.textContent = texto;
+    }
+
+    function detener() {
+      if (corte) { clearTimeout(corte); corte = null; }
+      if (grabadora && grabadora.state !== 'inactive') { grabadora.stop(); }
+    }
+
+    mic.addEventListener('click', function () {
+      if (grabadora && grabadora.state === 'recording') { detener(); return; }
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(function (pista) {
+        var trozos = [];
+        grabadora = new MediaRecorder(pista, { mimeType: formato });
+        grabadora.ondataavailable = function (ev) { if (ev.data && ev.data.size) { trozos.push(ev.data); } };
+        grabadora.onstop = function () {
+          // Soltar el micrófono apaga el indicador del navegador: el tendero tiene que ver
+          // que ya no se le está grabando.
+          pista.getTracks().forEach(function (t) { t.stop(); });
+          fijar(false, 'Transcribiendo…', true);
+          transcribir(new Blob(trozos, { type: formato }), formato)
+            .then(function (texto) {
+              fijar(false, 'Toca y habla');
+              if (!texto) { avisar('No te escuché. Inténtalo de nuevo o escribe la instrucción.', true); return; }
+              entrada.value = texto;
+              alTerminar(texto);
+            })
+            .catch(function (e) {
+              fijar(false, 'Toca y habla');
+              avisar(e.message, true);
+            });
+        };
+        grabadora.start();
+        fijar(true, 'Escuchando… toca para terminar');
+        corte = setTimeout(detener, MAX_SEGUNDOS * 1000);
+      }).catch(function () {
+        avisar('Permite el uso del micrófono en el navegador para dictar.', true);
+      });
+    });
+  }
+
+  // El audio viaja en base64 dentro del JSON, no como binario, para que esta llamada conserve
+  // la misma protección contra CSRF que el resto de la API.
+  function transcribir(blob, formato) {
+    return new Promise(function (resolver, rechazar) {
+      var lector = new FileReader();
+      lector.onerror = function () { rechazar(new Error('No se pudo leer la grabación.')); };
+      lector.onload = function () {
+        var base64 = String(lector.result).split(',')[1] || '';
+        api('POST', '/api/transcribir', { audio: base64, tipo: formato })
+          .then(function (r) { resolver((r.texto || '').trim()); })
+          .catch(rechazar);
+      };
+      lector.readAsDataURL(blob);
+    });
   }
 
   // Dictado con la Web Speech API del navegador (Chrome/Edge). El audio lo procesa el
@@ -792,6 +893,195 @@
     entrada.value = '';
     document.getElementById('otro').addEventListener('click', function () { zona.innerHTML = ''; entrada.focus(); });
     document.getElementById('otro').focus();
+  }
+
+  /* ---------- Recolectar frases de tenderos (herramienta interna) ---------- */
+  // No tiene enlace en el menú a propósito: se llega por #/recolectar. No es una función para el
+  // tendero, es la máquina de hacer banco de pruebas. Graba al tendero, transcribe con Whisper,
+  // deja corregir lo que entendió y acumula casos en el formato de evaluacion/casos.json.
+  // Nada de esto toca el inventario.
+  var GUARDADAS = 'stockvoz-frases-recogidas';
+
+  function frasesGuardadas() {
+    try { return JSON.parse(localStorage.getItem(GUARDADAS)) || []; } catch (e) { return []; }
+  }
+  function guardarFrases(lista) {
+    try { localStorage.setItem(GUARDADAS, JSON.stringify(lista)); } catch (e) { /* modo privado */ }
+  }
+
+  // El mismo cálculo que hace el backend, para que el caso guardado diga lo que el banco espera.
+  function estadoDeCaso(tipo, producto, cantidad) {
+    if (!tipo) { return 'no_entendido'; }
+    if (!producto) { return 'sin_producto'; }
+    return cantidad ? 'ok' : 'sin_cantidad';
+  }
+
+  function vistaRecolectar() {
+    var motor = motorDeVoz();
+    render(
+      '<h1>Recoger frases de tenderos</h1>' +
+      '<p class="sub">Graba al tendero hablando natural, corrige lo que haga falta y guarda el caso. ' +
+      'No se registra ningún movimiento: esto solo arma el banco de pruebas.</p>' +
+      '<section class="tarjeta captura" aria-label="Captura de la frase">' +
+        (motor
+          ? '<button type="button" class="mic" id="mic" aria-pressed="false" aria-describedby="mic-ayuda">' +
+              '<i class="material-icons" aria-hidden="true">mic</i><span id="mic-texto">Toca y habla</span></button>' +
+            '<p class="nota" id="mic-ayuda">Deja que el tendero hable como hablaría en su tienda. Toca otra vez para terminar.</p>'
+          : '<p class="nota" id="mic-ayuda">Este navegador no permite grabar. Escribe la frase tal como la dijo.</p>') +
+        '<form id="form-texto" class="fila-instruccion" novalidate>' +
+          '<label for="instruccion">Lo que dijo <span class="nota">(corrígelo si Whisper se equivocó)</span></label>' +
+          '<input id="instruccion" maxlength="300" autocomplete="off" placeholder="Escribe o graba la frase">' +
+          '<button class="btn" type="submit">Ver qué entendió</button>' +
+        '</form>' +
+      '</section>' +
+      '<section id="resultado" aria-live="polite"></section>' +
+      '<section id="recogidas" class="tarjeta"></section>', 'Recoger frases');
+
+    var form = document.getElementById('form-texto');
+    var entrada = document.getElementById('instruccion');
+
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      proponerCaso(entrada.value);
+    });
+    prepararDictado(motor, entrada, function (texto) { proponerCaso(texto); });
+    pintarRecogidas();
+  }
+
+  function proponerCaso(texto) {
+    var zona = document.getElementById('resultado');
+    if (!texto.trim()) { zona.innerHTML = '<div class="tarjeta"><p class="error">Graba o escribe la frase.</p></div>'; return; }
+    zona.innerHTML = '<div class="tarjeta"><p class="cargando">Interpretando «' + esc(texto) + '»…</p></div>';
+    Promise.all([api('POST', '/api/interpretar', { texto: texto }), api('GET', '/api/productos')])
+      .then(function (r) { mostrarCaso(zona, texto, r[0], r[1]); })
+      .catch(function (e) { zona.innerHTML = '<div class="tarjeta"><p class="error">' + esc(e.message) + '</p></div>'; });
+  }
+
+  function mostrarCaso(zona, texto, r, productos) {
+    var movimientos = (r.operaciones || []).filter(function (o) { return o.tipo !== 'consulta'; });
+    var total = movimientos.length;
+    zona.innerHTML =
+      '<form class="tarjeta propuesta" id="form-caso" novalidate>' +
+        '<h2>' + (total ? 'Entendió ' + total + (total === 1 ? ' operación' : ' operaciones') : 'No entendió nada') + '</h2>' +
+        '<p class="nota">Corrige lo que esté mal. Lo que dejes aquí es lo que el banco va a exigir.</p>' +
+        '<p class="frase">«' + esc(texto) + '»</p>' +
+        '<p class="nota">Fuente: ' + esc(r.fuente) + (r.motivoRespaldo ? ' (respaldo: ' + esc(r.motivoRespaldo) + ')' : '') + '</p>' +
+        movimientos.map(function (o, i) { return filaOperacion(o, i, Math.max(total, 2), productos, false); }).join('') +
+        '<div class="campos"><div><label for="c-categoria">Categoría</label>' +
+          '<input id="c-categoria" maxlength="40" value="tenderos reales"></div></div>' +
+        '<div class="acciones">' +
+          '<button class="btn btn--grande" type="submit">Guardar caso</button>' +
+          '<button class="btn btn--blanco" type="button" id="caso-nada">Guardar como «no se entiende»</button>' +
+          '<button class="btn btn--blanco" type="button" id="caso-descartar">Descartar</button>' +
+        '</div>' +
+      '</form>';
+
+    var form = document.getElementById('form-caso');
+    form.querySelectorAll('[data-candidato]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        form.querySelector('#c-producto-' + b.getAttribute('data-fila')).value = b.getAttribute('data-candidato');
+      });
+    });
+    form.querySelectorAll('[data-quitar]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var bloque = form.querySelector('[data-fila="' + b.getAttribute('data-quitar') + '"]');
+        if (bloque) { bloque.remove(); }
+      });
+    });
+    document.getElementById('caso-descartar').addEventListener('click', function () {
+      zona.innerHTML = '';
+      document.getElementById('instruccion').focus();
+    });
+    document.getElementById('caso-nada').addEventListener('click', function () {
+      anotarCaso(texto, document.getElementById('c-categoria').value, [], productos);
+    });
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var esperadas = [];
+      form.querySelectorAll('[data-fila]').forEach(function (bloque) {
+        var i = bloque.getAttribute('data-fila');
+        var productoId = Number(form.querySelector('#c-producto-' + i).value) || null;
+        var cantidad = Number(form.querySelector('#c-cantidad-' + i).value) || null;
+        var tipo = (form.querySelector('input[name="c-tipo-' + i + '"]:checked') || {}).value || null;
+        esperadas.push({ estado: estadoDeCaso(tipo, productoId, cantidad), tipo: tipo, cantidad: cantidad, producto: productoId });
+      });
+      anotarCaso(texto, document.getElementById('c-categoria').value, esperadas, productos);
+    });
+  }
+
+  function anotarCaso(texto, categoria, esperadas, productos) {
+    var lista = frasesGuardadas();
+    lista.push({
+      categoria: (categoria || 'tenderos reales').trim(),
+      texto: texto.trim(),
+      esperadas: esperadas,
+      // El catálogo se guarda con cada caso porque los id son de este negocio: sin esto, el
+      // archivo descargado no se puede interpretar en otro lado.
+      catalogo: productos.map(function (p) { return { id: p.id, nombre: p.nombre }; })
+    });
+    guardarFrases(lista);
+    document.getElementById('resultado').innerHTML = '';
+    var entrada = document.getElementById('instruccion');
+    entrada.value = '';
+    entrada.focus();
+    pintarRecogidas();
+    avisar('Caso guardado. Van ' + lista.length + '.');
+  }
+
+  function pintarRecogidas() {
+    var zona = document.getElementById('recogidas');
+    if (!zona) { return; }
+    var lista = frasesGuardadas();
+    if (!lista.length) {
+      zona.innerHTML = '<h2>Frases recogidas</h2><p class="nota">Todavía no hay ninguna. ' +
+        'Las que guardes quedan en este navegador hasta que las descargues.</p>';
+      return;
+    }
+    zona.innerHTML = '<h2>Frases recogidas (' + lista.length + ')</h2>' +
+      '<ul class="lista" role="list">' + lista.map(function (c, i) {
+        var resumen = c.esperadas.length
+          ? c.esperadas.map(function (e) { return esc(TIPOS[e.tipo] || '—') + ' ' + (e.cantidad || '?'); }).join(' · ')
+          : 'no se entiende';
+        return '<li><span>«' + esc(c.texto) + '»</span><span>' + resumen +
+          ' <button type="button" class="btn btn--blanco btn--quitar" data-borrar="' + i + '">Quitar</button></span></li>';
+      }).join('') + '</ul>' +
+      '<p class="nota">Viven solo en este navegador. Descárgalas antes de cerrar o de cambiar de equipo.</p>' +
+      '<div class="acciones"><button type="button" class="btn" id="descargar-frases">Descargar JSON</button>' +
+      '<button type="button" class="btn btn--blanco" id="vaciar-frases">Borrar todas</button></div>';
+
+    zona.querySelectorAll('[data-borrar]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var l = frasesGuardadas();
+        l.splice(Number(b.getAttribute('data-borrar')), 1);
+        guardarFrases(l);
+        pintarRecogidas();
+      });
+    });
+    document.getElementById('descargar-frases').addEventListener('click', descargarFrases);
+    document.getElementById('vaciar-frases').addEventListener('click', function () {
+      confirmar('¿Borrar las ' + frasesGuardadas().length + ' frases recogidas?',
+        'Se pierden si no las has descargado. Esto no se puede deshacer.', 'Borrar todas')
+        .then(function (si) { if (si) { guardarFrases([]); pintarRecogidas(); } });
+    });
+  }
+
+  function descargarFrases() {
+    var lista = frasesGuardadas();
+    if (!lista.length) { return; }
+    // Se escribe en el formato de evaluacion/casos.json para poder mezclarlo sin trabajo manual.
+    var archivo = {
+      nota: 'Frases grabadas a tenderos reales. Mézclalas con evaluacion/casos.json.',
+      catalogo: lista[0].catalogo,
+      casos: lista.map(function (c) { return { categoria: c.categoria, texto: c.texto, esperadas: c.esperadas }; })
+    };
+    var url = URL.createObjectURL(new Blob([JSON.stringify(archivo, null, 2)], { type: 'application/json' }));
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'frases-tenderos-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
 
   /* ---------- Inventario ---------- */

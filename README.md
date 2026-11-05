@@ -64,6 +64,9 @@ El servidor lee `.env` al arrancar; si una variable ya existe en el sistema, esa
 | `IA_CLAVE`, `IA_URL`, `IA_MODELO` | Groq / `gpt-oss-20b` | Clave y modelo del proveedor. `IA_CLAVE` es obligatoria con `STOCKVOZ_IA=directo` |
 | `N8N_TIMEOUT_MS` | `6000` | Milisegundos que se espera a n8n antes de usar el respaldo |
 | `STOCKVOZ_IA_LIMITE_DIARIO` | `500` | Interpretaciones con IA por negocio y día; pasado el tope se usan las reglas |
+| `STOCKVOZ_VOZ` | `0` | `1` para transcribir el dictado en el servidor con Whisper en vez del dictado del navegador |
+| `VOZ_CLAVE`, `VOZ_URL`, `VOZ_MODELO` | `IA_CLAVE` / Groq / `whisper-large-v3-turbo` | Proveedor de transcripción. Por defecto reutiliza la clave de la IA |
+| `STOCKVOZ_VOZ_LIMITE_DIARIO` | `200` | Transcripciones por negocio y día |
 
 **Dictado por voz:** funciona en Chrome y Edge (Web Speech API). El navegador envía el audio a su
 servicio de reconocimiento y StockVoz solo recibe el texto. En otros navegadores se usa el campo de texto.
@@ -90,6 +93,43 @@ Al arrancar, la aplicación aplica en orden las que faltan y deja registro en la
 
 En GitHub corren solas en cada push y pull request (GitHub Actions, `.github/workflows/pruebas.yml`),
 contra un PostgreSQL 17 temporal. El resultado aparece en la pestaña **Actions** del repositorio.
+
+## Dictado por voz
+
+El tendero puede dictar en vez de escribir. Hay dos motores, y la app elige solo:
+
+| Motor | Cuándo se usa | Cómo funciona |
+|---|---|---|
+| **Whisper en el servidor** | Con `STOCKVOZ_VOZ=1` y un navegador que sepa grabar | El navegador graba el audio, StockVoz se lo manda a `whisper-large-v3-turbo` y devuelve el texto |
+| **Web Speech API** | Si lo anterior no está disponible | El navegador transcribe; solo funciona en Chrome/Edge y el audio pasa por Google |
+
+Whisper es el camino principal porque funciona en cualquier navegador y el audio no sale hacia el
+servicio de voz del navegador. La Web Speech API queda como respaldo, igual que las reglas son el
+respaldo de la IA: si el proveedor se cae, en Chrome se puede seguir dictando.
+
+- **No pasa por n8n**, a diferencia de la interpretación. Transcribir es una sola llamada sin lógica,
+  y meterla por n8n haría que una caída del contenedor dejara a la app sin voz **y** sin
+  interpretación a la vez. El porqué está escrito en `src/voz.js`.
+- **El audio viaja en base64 dentro del JSON**, no como binario, para que la ruta conserve la misma
+  protección contra CSRF que el resto de la API (solo se acepta `application/json`).
+- Tope de 1,5 MB por grabación y corte automático al minuto, para no gastar cuota por un micrófono
+  que quedó abierto. Si algo falla, el mensaje siempre ofrece escribir la instrucción a mano.
+- Cupo del plan gratuito de Groq: 2.000 transcripciones al día, aparte del cupo de la interpretación.
+
+### Recoger frases de tenderos
+
+En `#/recolectar` hay una herramienta interna, **sin enlace en el menú a propósito**: no es una
+función para el tendero, es la máquina de armar el banco de pruebas.
+
+El ciclo es: grabar al tendero → ver la transcripción y corregirla si Whisper se equivocó → ver qué
+entendió StockVoz → corregirlo → guardar el caso. Al final se descarga un JSON con el mismo formato
+de `evaluacion/casos.json`, listo para mezclar. **No registra ningún movimiento.**
+
+Las frases viven en el navegador hasta que se descargan, así que hay que descargarlas antes de
+cerrar o de cambiar de equipo.
+
+Esto existe porque el banco actual lo escribimos nosotros, y ese es el punto más débil del proyecto:
+ver [docs/plan-hasta-la-sustentacion.md](docs/plan-hasta-la-sustentacion.md).
 
 ## Interpretación con IA y evaluación
 
@@ -302,7 +342,7 @@ tenga cuenta o no.
 | Hoy | Por qué | Siguiente paso |
 |---|---|---|
 | Intérprete por reglas como respaldo, y la IA vía n8n (`STOCKVOZ_IA=n8n`) | La app de un tendero no puede dejar de funcionar porque se cayó un proveedor | Rehacer el banco con frases grabadas a tenderos reales |
-| Web Speech API del navegador | Dictado gratis en Chrome/Edge | Procesar audio en el servidor (por ejemplo Whisper) si se necesita en otros navegadores o en WhatsApp |
+| Transcripción con Whisper en el servidor, y la Web Speech API como respaldo | Funciona en cualquier navegador y el audio no pasa por Google | Medir qué tan bien transcribe a tenderos reales, con grabaciones de verdad |
 | El intérprete por reglas no separa frases con el verbo omitido («vendí 2 panes y 3 leches») | Juntar de más es preferible a separar mal, que inventaría operaciones | Heredar el verbo del pedazo anterior sin confundirlo con los números compuestos |
 | El nodo HTTP de n8n no bloquea redirecciones, el modo directo sí | La URL es fija, el riesgo es bajo | Igualarlo al modo directo |
 

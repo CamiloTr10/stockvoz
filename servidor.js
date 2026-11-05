@@ -10,6 +10,7 @@ const db = require('./src/db');
 const auth = require('./src/auth');
 const inv = require('./src/inventario');
 const { crearIA, configDesdeEntorno } = require('./src/ia');
+const { crearVoz, configDesdeEntorno: configVozDesdeEntorno, MAX_AUDIO } = require('./src/voz');
 const { sembrarSiVacia } = require('./src/demo');
 const { ErrorApi } = require('./src/errores');
 
@@ -40,7 +41,8 @@ function responder(res, estado, datos, extra) {
   res.end(JSON.stringify(datos));
 }
 
-function leerCuerpo(req) {
+function leerCuerpo(req, maximo) {
+  const tope = maximo || MAX_CUERPO;
   return new Promise(function (resolver, rechazar) {
     if (req.method === 'GET' || req.method === 'DELETE') { return resolver({}); }
     // Exigir JSON evita que un formulario de otro sitio dispare acciones (CSRF).
@@ -51,7 +53,7 @@ function leerCuerpo(req) {
     const partes = [];
     req.on('data', function (c) {
       tam += c.length;
-      if (tam > MAX_CUERPO) { rechazar(new ErrorApi(413, 'La petición es demasiado grande.')); req.destroy(); return; }
+      if (tam > tope) { rechazar(new ErrorApi(413, 'La petición es demasiado grande.')); req.destroy(); return; }
       partes.push(c);
     });
     req.on('end', function () {
@@ -78,11 +80,12 @@ async function crearApp(opciones) {
   // Frena el probar códigos de invitación al azar (ver la ruta de aceptar).
   const limitadorCodigos = auth.crearLimitador();
   const ia = crearIA(opciones.ia, { fetch: opciones.fetchIA, avisar: opciones.avisarIA });
+  const voz = crearVoz(opciones.voz, { fetch: opciones.fetchVoz });
   const segura = Boolean(opciones.cookieSegura);
 
   // Rutas: [método, patrón, requiere ('nada' | 'sesion' | 'negocio' | 'dueno'), manejador]
   const RUTAS = [
-    ['GET', /^\/api\/config$/, 'nada', function () { return { demo: demo }; }],
+    ['GET', /^\/api\/config$/, 'nada', function () { return { demo: demo, voz: voz.activa }; }],
     ['POST', /^\/api\/registro$/, 'nada', async function (c) {
       const r = await auth.registrar(base, c.cuerpo, ahora());
       const token = await auth.crearSesion(base, r.usuarioId, r.negocioId);
@@ -153,6 +156,11 @@ async function crearApp(opciones) {
       const catalogo = await inv.listarProductos(base, c.negocioId, false);
       return ia.interpretar(texto, catalogo, c.negocioId);
     }],
+    // El audio llega en base64 dentro del JSON y no como binario: así esta ruta conserva la
+    // protección contra CSRF que da exigir application/json en todo lo demás.
+    ['POST', /^\/api\/transcribir$/, 'negocio', function (c) {
+      return voz.transcribir(c.cuerpo.audio, c.cuerpo.tipo, c.negocioId);
+    }],
     ['POST', /^\/api\/movimientos$/, 'negocio', function (c) {
       c.estado = 201;
       return inv.registrarMovimiento(base, c.negocioId, c.sesion.usuario.id, Object.assign({}, c.cuerpo, { ahora: ahora() }));
@@ -182,7 +190,8 @@ async function crearApp(opciones) {
       throw new ErrorApi(candidatas.length ? 405 : 404, candidatas.length ? 'Método no permitido.' : 'Ruta no encontrada.');
     }
     const c = { url: url, params: ruta[1].exec(url.pathname), token: leerCookie(req), ip: req.socket.remoteAddress, estado: 200, cookie: null };
-    c.cuerpo = await leerCuerpo(req);
+    // El audio necesita un cuerpo mucho mayor: base64 lo engorda una tercera parte.
+    c.cuerpo = await leerCuerpo(req, url.pathname === '/api/transcribir' ? Math.ceil(MAX_AUDIO * 4 / 3) + 1024 : MAX_CUERPO);
     if (ruta[2] !== 'nada') {
       c.sesion = await auth.leerSesion(base, c.token);
       if (!c.sesion) { throw new ErrorApi(401, 'Tu sesión terminó. Vuelve a ingresar.'); }
@@ -231,11 +240,17 @@ if (require.main === module) {
   const puerto = Number(process.env.PORT) || 3000;
   // En producción (HTTPS) usar STOCKVOZ_COOKIE_SEGURA=1 para que la cookie solo viaje cifrada.
   let configIA = null;
-  try { configIA = configDesdeEntorno(process.env); } catch (e) { console.error('No se pudo iniciar StockVoz: ' + e.message); process.exit(1); }
-  crearApp({ urlDb: process.env.DATABASE_URL, demo: process.env.STOCKVOZ_DEMO !== '0', cookieSegura: process.env.STOCKVOZ_COOKIE_SEGURA === '1', ia: configIA })
+  let configVoz = null;
+  try {
+    configIA = configDesdeEntorno(process.env);
+    configVoz = configVozDesdeEntorno(process.env);
+  } catch (e) { console.error('No se pudo iniciar StockVoz: ' + e.message); process.exit(1); }
+  crearApp({ urlDb: process.env.DATABASE_URL, demo: process.env.STOCKVOZ_DEMO !== '0', cookieSegura: process.env.STOCKVOZ_COOKIE_SEGURA === '1', ia: configIA, voz: configVoz })
     .then(function (servidor) {
       servidor.listen(puerto, function () {
-        console.log('StockVoz escuchando en http://localhost:' + puerto + (configIA ? ' (IA activa vía n8n)' : ' (interpretación solo por reglas)'));
+        console.log('StockVoz escuchando en http://localhost:' + puerto +
+          (configIA ? ' (IA activa vía ' + configIA.modo + ')' : ' (interpretación solo por reglas)') +
+          (configVoz ? ' · voz por ' + configVoz.modelo : ' · voz por el navegador'));
       });
     })
     .catch(function (e) {
