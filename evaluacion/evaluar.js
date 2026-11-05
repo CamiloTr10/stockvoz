@@ -1,8 +1,9 @@
 'use strict';
 // Mide qué tan bien interpreta las frases de evaluacion/casos.json.
-//   npm run evaluar              intérprete por reglas (gratis)
-//   npm run evaluar -- --ia      la IA vía n8n, con la configuración de .env (gasta crédito de la API)
-//   npm run evaluar -- --resumen sin la lista de fallos
+//   npm run evaluar                 intérprete por reglas (gratis)
+//   npm run evaluar -- --ia         la IA con la configuración de .env (gasta cuota de la API)
+//   npm run evaluar -- --resumen    sin la lista de fallos
+//   npm run evaluar -- --ia --pausa 0   sin esperar entre frases (puede chocar con el límite por minuto)
 require('../src/entorno');
 const { interpretar } = require('../src/interprete');
 const { crearIA, configDesdeEntorno } = require('../src/ia');
@@ -10,6 +11,11 @@ const { cargarCasos, resumir, coincide } = require('./comun');
 
 const usarIA = process.argv.indexOf('--ia') !== -1;
 const soloResumen = process.argv.indexOf('--resumen') !== -1;
+// Los planes gratuitos limitan los tokens por minuto, así que por defecto se espera entre frases.
+const posPausa = process.argv.indexOf('--pausa');
+const pausaMs = posPausa === -1 ? 5000 : Number(process.argv[posPausa + 1]) || 0;
+
+function esperar(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
 function percentil(valores, p) {
   const orden = valores.slice().sort(function (a, b) { return a - b; });
@@ -21,13 +27,20 @@ function pct(a, b) { return b ? Math.round(100 * a / b) + ' %' : '-'; }
 async function main() {
   const { catalogo, casos } = cargarCasos();
   let ia = null;
+  let config = null;
   if (usarIA) {
-    // La evaluación siempre prueba la IA, aunque STOCKVOZ_IA esté en 0 en .env.
-    ia = crearIA(configDesdeEntorno(Object.assign({}, process.env, { STOCKVOZ_IA: '1' })), { avisar: function () {} });
+    // La evaluación siempre prueba la IA, aunque STOCKVOZ_IA esté apagada en .env. Si no se
+    // indicó modo, se usa el que tenga credenciales.
+    const enEntorno = process.env.STOCKVOZ_IA;
+    const modo = enEntorno && enEntorno !== '0' ? enEntorno : (process.env.IA_CLAVE ? 'directo' : 'n8n');
+    config = configDesdeEntorno(Object.assign({}, process.env, { STOCKVOZ_IA: modo }));
+    ia = crearIA(config, { avisar: function () {} });
+    if (pausaMs) { console.log('\nEsperando ' + pausaMs + ' ms entre frases para no pasarse del límite por minuto (cámbialo con --pausa).'); }
   }
 
   const filas = [];
   for (const c of casos) {
+    if (usarIA && pausaMs && filas.length) { await esperar(pausaMs); }
     const t0 = process.hrtime.bigint();
     const resultado = usarIA ? await ia.interpretar(c.texto, catalogo, 0) : interpretar(c.texto, catalogo);
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
@@ -45,7 +58,9 @@ async function main() {
     if (f.ok) { categorias[k].ok += 1; }
   });
 
-  console.log('\nIntérprete evaluado: ' + (usarIA ? 'IA vía n8n' : 'reglas') + '\n');
+  console.log('\nIntérprete evaluado: ' + (usarIA
+    ? (config.modo === 'directo' ? 'IA directa · ' + config.modelo : 'IA vía n8n')
+    : 'reglas') + '\n');
   const ancho = Math.max.apply(null, Object.keys(categorias).map(function (k) { return k.length; }));
   Object.keys(categorias).forEach(function (k) {
     const c = categorias[k];

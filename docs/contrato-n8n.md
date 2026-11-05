@@ -105,3 +105,28 @@ Cualquiera de estos casos hace que se use el intérprete por reglas, y la interf
 | `limite` | el negocio ya usó sus `STOCKVOZ_IA_LIMITE_DIARIO` interpretaciones con IA del día |
 
 La respuesta de `/api/interpretar` incluye `fuente` (`ia` o `reglas`) y, si hubo respaldo, `motivoRespaldo`.
+
+## Qué debe hacer el flujo por dentro
+
+El flujo de n8n es un traductor: recibe lo de arriba, le pregunta al modelo y devuelve lo de abajo.
+Las instrucciones y el esquema que debe enviarle al modelo **no se escriben a mano en n8n**: están en
+[`src/ia-instrucciones.js`](../src/ia-instrucciones.js), para que el flujo y el modo directo usen
+exactamente lo mismo y no se desincronicen.
+
+Para ver el cuerpo exacto que hay que enviarle al proveedor:
+
+```bash
+node -e "console.log(JSON.stringify(require('./src/ia-instrucciones').cuerpoPeticion({ texto: 'vendí 3 gaseosas de 400', catalogo: [{id:1,nombre:'Gaseosa 1,5 L'},{id:2,nombre:'Gaseosa 400 ml'}] }), null, 2))"
+```
+
+Pasos del flujo:
+
+1. **Webhook** que recibe el `POST` con `texto` y `catalogo`.
+2. **Comprobar el secreto**: si `x-stockvoz-secreto` no coincide, responder `401` y cortar.
+3. **Llamar al modelo** con el cuerpo de arriba, poniendo el catálogo recibido y la frase recibida.
+   La clave del proveedor va en las **credenciales de n8n**, nunca dentro del flujo exportado.
+4. **Responder** el contenido del modelo tal cual (ya viene con los seis campos), añadiendo `uso`
+   con los tokens si se quiere medir el costo.
+
+Con Groq el esquema va con `strict: true`, así que el modelo no puede responder otra cosa.
+De todas formas el backend valida: si algo no cuadra, usa el intérprete por reglas.

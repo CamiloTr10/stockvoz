@@ -169,3 +169,108 @@ test('configDesdeEntorno: apagada por defecto y exige URL y secreto cuando se en
   const c = configDesdeEntorno({ STOCKVOZ_IA: '1', N8N_URL: 'http://localhost:5678/webhook/stockvoz', N8N_SECRETO: SECRETO, N8N_TIMEOUT_MS: '3000' });
   assert.deepStrictEqual([c.url, c.secreto, c.timeoutMs, c.limiteDiario], ['http://localhost:5678/webhook/stockvoz', SECRETO, 3000, 500]);
 });
+
+// ---------- Modo directo: API compatible con OpenAI (Groq, DeepSeek…) ----------
+
+const { cuerpoPeticion, ESQUEMA, instrucciones } = require('../src/ia-instrucciones');
+
+const CLAVE = 'gsk-clave-de-prueba';
+
+function iaDirecta(extra, opciones) {
+  return crearIA(Object.assign({ modo: 'directo', url: url, clave: CLAVE, modelo: 'modelo-de-prueba', timeoutMs: 1000, limiteDiario: 100, esquemaEstricto: true }, extra),
+    Object.assign({ avisar: function () {} }, opciones));
+}
+
+// Respuesta con la forma que devuelve una API compatible con OpenAI.
+function comoOpenAI(contenido, extra) {
+  return responderJson(Object.assign({
+    choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: typeof contenido === 'string' ? contenido : JSON.stringify(contenido) } }],
+    usage: { prompt_tokens: 420, completion_tokens: 35 }
+  }, extra));
+}
+
+const RESPUESTA_OK = { estado: 'ok', tipo: 'venta', cantidad: 3, productoId: 2, candidatosIds: [], busqueda: '' };
+
+test('modo directo: usa la respuesta del modelo y cuenta los tokens', async function () {
+  manejador = comoOpenAI(RESPUESTA_OK);
+  const r = await iaDirecta().interpretar('vendí 3 gaseosas de 400', catalogo, 1);
+  assert.strictEqual(r.fuente, 'ia');
+  assert.deepStrictEqual([r.estado, r.tipo, r.cantidad, r.producto.id], ['ok', 'venta', 3, 2]);
+  assert.deepStrictEqual(r.uso, { entrada: 420, salida: 35 });
+});
+
+test('modo directo: envía la clave, el modelo y el esquema estricto', async function () {
+  manejador = comoOpenAI(RESPUESTA_OK);
+  await iaDirecta().interpretar('vendí 3 gaseosas de 400', catalogo, 1);
+  assert.strictEqual(recibidas[0].cabeceras.authorization, 'Bearer ' + CLAVE);
+  const c = JSON.parse(recibidas[0].cuerpo);
+  assert.strictEqual(c.model, 'modelo-de-prueba');
+  assert.strictEqual(c.temperature, 0, 'la misma frase debe dar siempre lo mismo');
+  assert.strictEqual(c.response_format.type, 'json_schema');
+  assert.strictEqual(c.response_format.json_schema.strict, true);
+  assert.deepStrictEqual(c.response_format.json_schema.schema.required.sort(),
+    ['busqueda', 'candidatosIds', 'cantidad', 'estado', 'productoId', 'tipo']);
+  assert.strictEqual(c.response_format.json_schema.schema.additionalProperties, false);
+});
+
+test('modo directo: al modelo solo le llegan la frase y los id y nombres del catálogo', async function () {
+  manejador = comoOpenAI(RESPUESTA_OK);
+  const conPrecios = catalogo.map(function (p) { return Object.assign({ precio: 9999, stock: 7 }, p); });
+  await iaDirecta().interpretar('vendí 3 gaseosas de 400', conPrecios, 1);
+  const c = JSON.parse(recibidas[0].cuerpo);
+  assert.strictEqual(c.messages.length, 2);
+  assert.strictEqual(c.messages[1].content, 'vendí 3 gaseosas de 400', 'la frase va sola en el mensaje del usuario');
+  assert.ok(c.messages[0].content.indexOf('2 = Gaseosa 400 ml') !== -1, 'el catálogo va con sus id');
+  assert.ok(recibidas[0].cuerpo.indexOf('9999') === -1, 'no deben viajar los precios');
+  assert.ok(recibidas[0].cuerpo.indexOf('"stock"') === -1, 'no debe viajar el stock');
+});
+
+test('modo directo: sin esquema estricto pide json y lo nombra en las instrucciones', async function () {
+  manejador = comoOpenAI(RESPUESTA_OK);
+  await iaDirecta({ esquemaEstricto: false }).interpretar('vendí 3 panes', catalogo, 1);
+  const c = JSON.parse(recibidas[0].cuerpo);
+  assert.deepStrictEqual(c.response_format, { type: 'json_object' });
+  assert.ok(/json/i.test(c.messages[0].content), 'DeepSeek exige la palabra json en el mensaje');
+});
+
+test('modo directo: respaldo cuando el proveedor falla o responde algo raro', async function () {
+  const casos = [
+    ['cuota', responderJson({ error: { message: 'rate limit' } }, 429)],
+    ['http', responderJson({ error: { message: 'clave inválida' } }, 401)],
+    ['http', responderJson({}, 500)],
+    ['invalida', responderJson('esto no es json')],
+    ['invalida', responderJson({ choices: [] })],
+    ['invalida', comoOpenAI('no soy json')],
+    ['invalida', comoOpenAI('')],
+    ['invalida', comoOpenAI(RESPUESTA_OK, { choices: [{ finish_reason: 'length', message: { content: '{"estado":"ok"' } }] })],
+    ['invalida', comoOpenAI({ estado: 'ok', tipo: 'venta', cantidad: 3, productoId: 999, candidatosIds: [], busqueda: '' })]
+  ];
+  for (const [motivo, respuesta] of casos) {
+    manejador = respuesta;
+    const r = await iaDirecta().interpretar('vendí 3 panes', catalogo, 1);
+    assert.deepStrictEqual([r.fuente, r.motivoRespaldo], ['reglas', motivo], JSON.stringify(motivo));
+    assert.strictEqual(r.estado, 'ok', 'el respaldo por reglas debe seguir respondiendo');
+  }
+});
+
+test('modo directo: respaldo si el proveedor se demora o no responde', async function () {
+  manejador = function () { /* no responde */ };
+  const lento = await iaDirecta({ timeoutMs: 150 }).interpretar('vendí 3 panes', catalogo, 1);
+  assert.deepStrictEqual([lento.fuente, lento.motivoRespaldo], ['reglas', 'timeout']);
+  const caido = await iaDirecta({ url: 'http://127.0.0.1:9/v1' }).interpretar('vendí 3 panes', catalogo, 1);
+  assert.deepStrictEqual([caido.fuente, caido.motivoRespaldo], ['reglas', 'red']);
+});
+
+test('las instrucciones nombran los seis estados y los tres tipos de movimiento', function () {
+  const texto = instrucciones(catalogo);
+  ESQUEMA.properties.estado.enum.forEach(function (e) { assert.ok(texto.indexOf(e) !== -1, 'falta explicar ' + e); });
+  ['venta', 'entrada', 'merma'].forEach(function (t) { assert.ok(texto.indexOf(t) !== -1, 'falta explicar ' + t); });
+  assert.ok(texto.indexOf('1 = Gaseosa 1,5 L') !== -1);
+});
+
+test('cuerpoPeticion usa el modelo por defecto y no inventa campos', function () {
+  const c = cuerpoPeticion({ texto: 'hola', catalogo: catalogo });
+  assert.strictEqual(c.model, 'openai/gpt-oss-20b');
+  assert.deepStrictEqual(Object.keys(c).sort(), ['max_completion_tokens', 'messages', 'model', 'response_format', 'temperature']);
+  assert.strictEqual(cuerpoPeticion({ texto: 'hola', catalogo: catalogo, esfuerzo: 'low' }).reasoning_effort, 'low');
+});

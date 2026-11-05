@@ -1,11 +1,17 @@
 'use strict';
-// Interpretación con IA a través de n8n, con el intérprete por reglas como respaldo.
+// Interpretación con IA, con el intérprete por reglas como respaldo. Dos modos:
+//   n8n      la frase va al flujo de n8n, que llama al modelo (la arquitectura del proyecto)
+//   directo  la frase va a una API compatible con OpenAI (Groq, DeepSeek…), sin n8n de por medio
+// El modo directo existe para medir modelos con `npm run evaluar -- --ia` sin montar n8n, y como
+// respaldo si n8n no está disponible el día de una demostración.
+//
 // El backend no confía en la IA: valida su respuesta contra el catálogo del negocio y, si algo
-// falla (n8n caído, lento, respuesta rara, producto ajeno), responde con las reglas. La IA solo
+// falla (caído, lento, respuesta rara, producto ajeno), responde con las reglas. La IA solo
 // propone; quien guarda es POST /api/movimientos, después de que el usuario confirma.
 // El formato de la petición y de la respuesta está en docs/contrato-n8n.md.
 const { interpretar } = require('./interprete');
 const { fechaLocal, MAX_CANTIDAD } = require('./inventario');
+const instruccionesIA = require('./ia-instrucciones');
 
 const ESTADOS = ['ok', 'consulta', 'ambiguo', 'sin_producto', 'sin_cantidad', 'no_entendido'];
 const OPERACIONES = ['venta', 'entrada', 'merma'];
@@ -63,7 +69,7 @@ function validar(d, catalogo, texto) {
   return resultado;
 }
 
-async function consultar(config, fetchFn, texto, catalogo) {
+async function consultarN8n(config, fetchFn, texto, catalogo) {
   let crudo;
   try {
     const r = await fetchFn(config.url, {
@@ -86,7 +92,49 @@ async function consultar(config, fetchFn, texto, catalogo) {
   return validar(datos, catalogo, texto);
 }
 
-// config: { url, secreto, timeoutMs, limiteDiario } o null para trabajar solo con reglas.
+// Llama a una API compatible con OpenAI (Groq, DeepSeek…) y traduce su respuesta al mismo formato.
+async function consultarDirecto(config, fetchFn, texto, catalogo) {
+  let r;
+  try {
+    r = await fetchFn(config.url, {
+      method: 'POST',
+      redirect: 'error',                      // la clave no debe seguir una redirección a otro sitio
+      signal: AbortSignal.timeout(config.timeoutMs),
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + config.clave },
+      // Al modelo solo le llegan la frase y los id y nombres de los productos del negocio.
+      body: JSON.stringify(instruccionesIA.cuerpoPeticion({
+        modelo: config.modelo, texto: texto, estricto: config.esquemaEstricto, esfuerzo: config.esfuerzo,
+        catalogo: catalogo.map(function (p) { return { id: p.id, nombre: p.nombre }; })
+      }))
+    });
+  } catch (e) {
+    throw fallo(e.name === 'TimeoutError' || e.name === 'AbortError' ? 'timeout' : 'red', e.message);
+  }
+  const crudo = await r.text();
+  if (!r.ok) {
+    // 429 es haber gastado la cuota del proveedor; conviene distinguirlo de un error suyo.
+    throw fallo(r.status === 429 ? 'cuota' : 'http', 'el modelo respondió ' + r.status + ': ' + crudo.slice(0, 200));
+  }
+  if (crudo.length > MAX_RESPUESTA) { throw fallo('invalida', 'respuesta demasiado grande'); }
+  let sobre;
+  try { sobre = JSON.parse(crudo); } catch (e) { throw fallo('invalida', 'la respuesta no es JSON'); }
+  const eleccion = sobre.choices && sobre.choices[0];
+  if (!eleccion) { throw fallo('invalida', 'la respuesta no trae ninguna opción'); }
+  if (eleccion.finish_reason === 'length') { throw fallo('invalida', 'el modelo se quedó sin tokens antes de terminar'); }
+  const contenido = eleccion.message && typeof eleccion.message.content === 'string' ? eleccion.message.content.trim() : '';
+  if (!contenido) { throw fallo('invalida', 'el modelo no devolvió contenido'); }
+  let datos;
+  try { datos = JSON.parse(contenido); } catch (e) { throw fallo('invalida', 'lo que respondió el modelo no es JSON'); }
+
+  const resultado = validar(datos, catalogo, texto);
+  const uso = sobre.usage;
+  if (uso && Number.isInteger(uso.prompt_tokens) && Number.isInteger(uso.completion_tokens)) {
+    resultado.uso = { entrada: uso.prompt_tokens, salida: uso.completion_tokens };
+  }
+  return resultado;
+}
+
+// config: lo que devuelve configDesdeEntorno, o null para trabajar solo con reglas.
 // opciones (para pruebas): fetch, ahora, avisar.
 function crearIA(config, opciones) {
   const o = opciones || {};
@@ -100,7 +148,7 @@ function crearIA(config, opciones) {
   return {
     activa: Boolean(config),
     // Devuelve el mismo formato que interpretar() más `fuente` ('ia' | 'reglas') y, si se usó el
-    // respaldo, `motivoRespaldo` ('limite' | 'timeout' | 'red' | 'http' | 'invalida').
+    // respaldo, `motivoRespaldo` ('limite' | 'cuota' | 'timeout' | 'red' | 'http' | 'invalida').
     interpretar: async function (texto, catalogo, negocioId) {
       const reglas = function (motivo) {
         return Object.assign(interpretar(texto, catalogo), { fuente: 'reglas' }, motivo ? { motivoRespaldo: motivo } : {});
@@ -115,6 +163,7 @@ function crearIA(config, opciones) {
       usos.set(clave, (usos.get(clave) || 0) + 1);
 
       try {
+        const consultar = config.modo === 'directo' ? consultarDirecto : consultarN8n;
         const r = await consultar(config, fetchFn, frase, catalogo);
         r.fuente = 'ia';
         return r;
@@ -128,21 +177,42 @@ function crearIA(config, opciones) {
 
 // Lee la configuración de .env. Devuelve null si la IA está apagada; si está encendida y falta
 // algo, falla al arrancar en lugar de apagarse en silencio.
-function configDesdeEntorno(env) {
-  if (env.STOCKVOZ_IA !== '1') { return null; }
-  if (!env.N8N_URL || !env.N8N_SECRETO) { throw new Error('STOCKVOZ_IA=1 exige N8N_URL y N8N_SECRETO en .env.'); }
-  if (env.N8N_SECRETO.length < 16) { throw new Error('N8N_SECRETO debe tener al menos 16 caracteres.'); }
+function urlValida(valor, nombre, avisarSiNoCifrada) {
   let url;
-  try { url = new URL(env.N8N_URL); } catch (e) { throw new Error('N8N_URL no es una URL válida.'); }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') { throw new Error('N8N_URL debe empezar con http:// o https://.'); }
-  if (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].indexOf(url.hostname) === -1) {
-    console.warn('[ia] N8N_URL usa http:// hacia un equipo remoto: el secreto viajaría sin cifrar. Usa https://.');
+  try { url = new URL(valor); } catch (e) { throw new Error(nombre + ' no es una URL válida.'); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') { throw new Error(nombre + ' debe empezar con http:// o https://.'); }
+  if (avisarSiNoCifrada && url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].indexOf(url.hostname) === -1) {
+    console.warn('[ia] ' + nombre + ' usa http:// hacia un equipo remoto: el secreto viajaría sin cifrar. Usa https://.');
   }
-  return {
-    url: url.href, secreto: env.N8N_SECRETO,
+  return url.href;
+}
+
+function configDesdeEntorno(env) {
+  // '1' se sigue aceptando como sinónimo de 'n8n' para no romper los .env que ya existen.
+  const modo = env.STOCKVOZ_IA === '1' ? 'n8n' : env.STOCKVOZ_IA;
+  if (!modo || modo === '0') { return null; }
+  if (modo !== 'n8n' && modo !== 'directo') { throw new Error("STOCKVOZ_IA debe ser 0, n8n o directo."); }
+
+  const comun = {
+    modo: modo,
     timeoutMs: Number(env.N8N_TIMEOUT_MS) || 6000,
     limiteDiario: Number(env.STOCKVOZ_IA_LIMITE_DIARIO) || 500
   };
+
+  if (modo === 'n8n') {
+    if (!env.N8N_URL || !env.N8N_SECRETO) { throw new Error('STOCKVOZ_IA=n8n exige N8N_URL y N8N_SECRETO en .env.'); }
+    if (env.N8N_SECRETO.length < 16) { throw new Error('N8N_SECRETO debe tener al menos 16 caracteres.'); }
+    return Object.assign(comun, { url: urlValida(env.N8N_URL, 'N8N_URL', true), secreto: env.N8N_SECRETO });
+  }
+
+  if (!env.IA_CLAVE) { throw new Error('STOCKVOZ_IA=directo exige IA_CLAVE en .env (la clave de tu proveedor).'); }
+  return Object.assign(comun, {
+    url: urlValida(env.IA_URL || instruccionesIA.URL_POR_DEFECTO, 'IA_URL', false),
+    clave: env.IA_CLAVE,
+    modelo: env.IA_MODELO || instruccionesIA.MODELO_POR_DEFECTO,
+    esquemaEstricto: env.IA_ESQUEMA_ESTRICTO !== '0',
+    esfuerzo: env.IA_ESFUERZO || null
+  });
 }
 
 module.exports = { crearIA, configDesdeEntorno, validar };

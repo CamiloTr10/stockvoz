@@ -59,8 +59,9 @@ El servidor lee `.env` al arrancar; si una variable ya existe en el sistema, esa
 | `DATABASE_URL_PRUEBA` | — (para `node --test`) | Base que las pruebas **borran** en cada corrida; su nombre debe terminar en `_prueba` |
 | `STOCKVOZ_DEMO` | `1` | `0` para no cargar las cuentas y negocios de demostración |
 | `STOCKVOZ_COOKIE_SEGURA` | `0` | `1` para que la cookie de sesión solo viaje por HTTPS (obligatorio al publicar) |
-| `STOCKVOZ_IA` | `0` | `1` para interpretar con IA vía n8n, con las reglas como respaldo (ver abajo) |
-| `N8N_URL`, `N8N_SECRETO` | — | Webhook de n8n y secreto compartido (mínimo 16 caracteres). Obligatorias si `STOCKVOZ_IA=1` |
+| `STOCKVOZ_IA` | `0` | `n8n` o `directo` para interpretar con IA, con las reglas como respaldo (ver abajo) |
+| `N8N_URL`, `N8N_SECRETO` | — | Webhook de n8n y secreto compartido (mínimo 16 caracteres). Obligatorias con `STOCKVOZ_IA=n8n` |
+| `IA_CLAVE`, `IA_URL`, `IA_MODELO` | Groq / `gpt-oss-20b` | Clave y modelo del proveedor. `IA_CLAVE` es obligatoria con `STOCKVOZ_IA=directo` |
 | `N8N_TIMEOUT_MS` | `6000` | Milisegundos que se espera a n8n antes de usar el respaldo |
 | `STOCKVOZ_IA_LIMITE_DIARIO` | `500` | Interpretaciones con IA por negocio y día; pasado el tope se usan las reglas |
 
@@ -74,7 +75,7 @@ cd stockvoz
 node --test
 ```
 
-117 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con un n8n simulado (13) y la API de punta a punta (aislamiento entre negocios,
+125 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con n8n y un proveedor simulados (21) y la API de punta a punta (aislamiento entre negocios,
 roles, stock insuficiente, ventas simultáneas, anulaciones, invitaciones, exportación, archivos de la app instalable, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
 Las que usan la base lo hacen sobre `DATABASE_URL_PRUEBA` y se niegan a correr si esa base no termina en `_prueba`.
 
@@ -92,11 +93,20 @@ contra un PostgreSQL 17 temporal. El resultado aparece en la pestaña **Actions*
 
 ## Interpretación con IA y evaluación
 
-Por defecto cada frase la interpreta `src/interprete.js` (reglas, gratis y sin conexión). Con `STOCKVOZ_IA=1`,
-`POST /api/interpretar` se la pasa a un flujo de n8n que consulta un modelo de lenguaje:
+Por defecto cada frase la interpreta `src/interprete.js` (reglas, gratis y sin conexión). Con la IA encendida,
+`POST /api/interpretar` se la pasa a un modelo de lenguaje. Hay dos modos:
+
+| `STOCKVOZ_IA` | Cómo llega la frase al modelo | Para qué |
+|---|---|---|
+| `n8n` | StockVoz → flujo de n8n → modelo | La arquitectura que define el proyecto |
+| `directo` | StockVoz → API compatible con OpenAI (Groq, DeepSeek…) | Medir modelos sin montar n8n, y como respaldo si n8n no está disponible |
+
+Las instrucciones y el esquema que recibe el modelo están en `src/ia-instrucciones.js`, en un solo lugar
+para que el flujo de n8n y el modo directo usen exactamente lo mismo. En los dos modos:
 
 - **La IA solo propone.** El backend valida la respuesta: solo acepta productos del catálogo del propio negocio, cantidades válidas y campos coherentes con el estado. Después el usuario confirma y `POST /api/movimientos` guarda, igual que siempre.
-- **Respaldo:** si n8n está caído, tarda más de `N8N_TIMEOUT_MS`, responde un error o algo inválido, o el negocio ya llegó a su límite diario, se usan las reglas y la interfaz sigue funcionando. La respuesta indica `fuente` (`ia` o `reglas`) y, si hubo respaldo, `motivoRespaldo`.
+- **Respaldo:** si el proveedor está caído, tarda más de `N8N_TIMEOUT_MS`, responde un error, devuelve algo inválido, se acaba su cuota o el negocio llegó a su límite diario, se usan las reglas y la interfaz sigue funcionando. La respuesta indica `fuente` (`ia` o `reglas`) y, si hubo respaldo, `motivoRespaldo`.
+- **Formato garantizado:** con Groq se envía el esquema con `strict: true`, así que el modelo no puede responder otra cosa. Con proveedores que no lo admitan se usa `IA_ESQUEMA_ESTRICTO=0` y la validación del backend hace el resto.
 - **Privacidad:** a n8n solo viajan la frase y los `id` y nombres de los productos del negocio. Sin precios, stock ni datos de personas.
 - El formato exacto que debe recibir y devolver el flujo está en [docs/contrato-n8n.md](docs/contrato-n8n.md).
 
@@ -105,7 +115,7 @@ Por defecto cada frase la interpreta `src/interprete.js` (reglas, gratis y sin c
 
 ```bash
 npm run evaluar            # intérprete por reglas (gratis)
-npm run evaluar -- --ia    # la IA vía n8n, según .env (gasta crédito de la API)
+npm run evaluar -- --ia    # la IA, según .env (gasta cuota de la API)
 ```
 
 Muestra aciertos por categoría, tiempo por frase (mediana y p95), cuántas respondió la IA y cuántas cayeron al respaldo
@@ -121,7 +131,8 @@ stockvoz/
 ├── migraciones/         Cambios del esquema de PostgreSQL, numerados (001_..., 002_...)
 ├── src/
 │   ├── interprete.js    Frase en español → operación propuesta (tipo, producto, cantidad), por reglas
-│   ├── ia.js            Interpretación con IA vía n8n: validación de la respuesta y respaldo por reglas
+│   ├── ia.js            Interpretación con IA: validación de la respuesta y respaldo por reglas
+│   ├── ia-instrucciones.js  Lo que recibe el modelo: instrucciones, esquema y cuerpo de la petición
 │   ├── inventario.js    Reglas del inventario: productos, movimientos, panel y reportes
 │   ├── auth.js          Cuentas, contraseñas (scrypt), sesiones, invitaciones y límite de intentos
 │   ├── db.js            Pool de PostgreSQL, migraciones y transacciones
