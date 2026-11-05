@@ -24,11 +24,22 @@ function fallo(motivo, mensaje) {
   return e;
 }
 
-// Convierte la respuesta de n8n en el mismo formato que devuelve interpretar(), o lanza
+// El estado es un resumen de los otros campos, así que lo calcula el backend en vez de creerle
+// al modelo: midiendo se vio que a veces los datos venían bien y la etiqueta mal ("vendí arroz"
+// llegaba como ok y sin cantidad, cuando eso es sin_cantidad).
+function estadoSegunCampos(tipo, producto, cantidad, candidatos) {
+  if (tipo === null) { return 'no_entendido'; }
+  if (tipo === 'consulta') { return producto ? 'consulta' : 'sin_producto'; }
+  if (producto === null) { return candidatos.length >= 2 ? 'ambiguo' : 'sin_producto'; }
+  return cantidad === null ? 'sin_cantidad' : 'ok';
+}
+
+// Convierte la respuesta del modelo en el mismo formato que devuelve interpretar(), o lanza
 // un error 'invalida' si no es una respuesta que el backend acepte.
 function validar(d, catalogo, texto) {
   const invalida = function (m) { return fallo('invalida', m); };
   if (!d || typeof d !== 'object' || Array.isArray(d)) { throw invalida('la respuesta no es un objeto'); }
+  // El estado se exige para no tragarse una respuesta vacía, pero abajo se recalcula.
   if (ESTADOS.indexOf(d.estado) === -1) { throw invalida('estado desconocido'); }
   const tipo = d.tipo === undefined ? null : d.tipo;
   if (tipo !== null && tipo !== 'consulta' && OPERACIONES.indexOf(tipo) === -1) { throw invalida('tipo desconocido'); }
@@ -47,19 +58,12 @@ function validar(d, catalogo, texto) {
   if (!Array.isArray(ids) || ids.length > MAX_CANDIDATOS || new Set(ids).size !== ids.length) { throw invalida('candidatos inválidos'); }
   const candidatos = ids.map(buscar);
 
-  const operacion = OPERACIONES.indexOf(tipo) !== -1;
-  const coherente = {
-    ok: operacion && producto !== null && cantidad !== null,
-    consulta: tipo === 'consulta' && producto !== null,
-    ambiguo: operacion && producto === null && candidatos.length >= 2,
-    sin_producto: operacion && producto === null,
-    sin_cantidad: operacion && producto !== null && cantidad === null,
-    no_entendido: tipo === null && producto === null
-  }[d.estado];
-  if (!coherente) { throw invalida('los campos no cuadran con el estado'); }
+  const estado = estadoSegunCampos(tipo, producto, cantidad, candidatos);
+  // En consulta y no_entendido la cantidad no significa nada: se descarta para no confundir.
+  const cantidadFinal = estado === 'consulta' || estado === 'no_entendido' ? null : cantidad;
 
   const resultado = {
-    estado: d.estado, tipo: tipo, cantidad: cantidad, producto: producto, candidatos: candidatos,
+    estado: estado, tipo: tipo, cantidad: cantidadFinal, producto: producto, candidatos: candidatos,
     busqueda: typeof d.busqueda === 'string' ? d.busqueda.trim().slice(0, 120) : '', texto: texto
   };
   const uso = d.uso;

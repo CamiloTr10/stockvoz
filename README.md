@@ -75,7 +75,7 @@ cd stockvoz
 node --test
 ```
 
-125 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con n8n y un proveedor simulados (21) y la API de punta a punta (aislamiento entre negocios,
+126 pruebas: el intérprete de frases (47 casos vigilados), las migraciones (4), el módulo de IA con n8n y un proveedor simulados (22) y la API de punta a punta (aislamiento entre negocios,
 roles, stock insuficiente, ventas simultáneas, anulaciones, invitaciones, exportación, archivos de la app instalable, validaciones, sesiones, CSRF, bloqueo por intentos fallidos, URLs malformadas y cabeceras de seguridad).
 Las que usan la base lo hacen sobre `DATABASE_URL_PRUEBA` y se niegan a correr si esa base no termina en `_prueba`.
 
@@ -107,6 +107,10 @@ para que el flujo de n8n y el modo directo usen exactamente lo mismo. En los dos
 - **La IA solo propone.** El backend valida la respuesta: solo acepta productos del catálogo del propio negocio, cantidades válidas y campos coherentes con el estado. Después el usuario confirma y `POST /api/movimientos` guarda, igual que siempre.
 - **Respaldo:** si el proveedor está caído, tarda más de `N8N_TIMEOUT_MS`, responde un error, devuelve algo inválido, se acaba su cuota o el negocio llegó a su límite diario, se usan las reglas y la interfaz sigue funcionando. La respuesta indica `fuente` (`ia` o `reglas`) y, si hubo respaldo, `motivoRespaldo`.
 - **Formato garantizado:** con Groq se envía el esquema con `strict: true`, así que el modelo no puede responder otra cosa. Con proveedores que no lo admitan se usa `IA_ESQUEMA_ESTRICTO=0` y la validación del backend hace el resto.
+- **El estado lo decide el backend.** El modelo aporta tipo, producto, cantidad y candidatos; si hay
+  producto y cantidad es `ok`, si falta la cantidad es `sin_cantidad`, y así. Midiendo se vio que a
+  veces los datos venían bien y la etiqueta mal, y rechazar toda la respuesta por eso desperdiciaba
+  interpretaciones correctas.
 - **Privacidad:** a n8n solo viajan la frase y los `id` y nombres de los productos del negocio. Sin precios, stock ni datos de personas.
 - El formato exacto que debe recibir y devolver el flujo está en [docs/contrato-n8n.md](docs/contrato-n8n.md).
 
@@ -120,6 +124,29 @@ npm run evaluar -- --ia    # la IA, según .env (gasta cuota de la API)
 
 Muestra aciertos por categoría, tiempo por frase (mediana y p95), cuántas respondió la IA y cuántas cayeron al respaldo
 (esas **no** cuentan como acierto de la IA) y la lista de fallos. Las frases marcadas `"regresion": true` también las vigila `node --test`.
+
+### Medición del 5 de noviembre de 2026
+
+Groq con `openai/gpt-oss-20b`, esquema estricto y `IA_ESFUERZO=low`:
+
+| Categoría | Reglas | Groq |
+|---|---|---|
+| Frases de los wireframes | 100 % | 100 % |
+| Números y mermas | 100 % | 100 % |
+| Casos que el usuario debe resolver | 100 % | 100 % |
+| Consultas | 75 % | **100 %** |
+| Coloquial | 92 % | **100 %** |
+| Números en letras | 57 % | **100 %** |
+| Errores de dictado | 57 % | **100 %** |
+| Nombres de producto | 100 % | 100 % |
+| **Total** | **85 %** | **100 %** |
+
+Tiempo por frase: mediana 870 ms, p95 2,5 s (el límite antes del respaldo son 6 s).
+Gasto: unos 900 tokens por frase, así que los 200.000 diarios del plan gratuito dan para unas 220 frases.
+
+**Ojo con este 100 %:** las 55 frases las escribimos nosotros, no son de tenderos reales. Sirve para
+ver que el modelo entiende el español coloquial y los errores de dictado, no para decir que el
+problema está resuelto. El banco hay que rehacerlo con frases grabadas de verdad.
 
 ## Estructura
 

@@ -130,3 +130,14 @@ Pasos del flujo:
 
 Con Groq el esquema va con `strict: true`, así que el modelo no puede responder otra cosa.
 De todas formas el backend valida: si algo no cuadra, usa el intérprete por reglas.
+
+## El estado lo recalcula el backend
+
+El flujo puede devolver el `estado` que crea, pero **StockVoz lo vuelve a calcular** a partir de
+`tipo`, `productoId`, `cantidad` y `candidatosIds`. Midiendo contra Groq se vio que a veces el
+modelo manda los datos bien y la etiqueta mal (por ejemplo `ok` sin cantidad, que en realidad es
+`sin_cantidad`), y rechazar la respuesta entera por eso desperdiciaba interpretaciones correctas.
+
+Lo que sí tiene que venir bien del flujo es el resto: un `productoId` del catálogo que se envió,
+una `cantidad` entera dentro de rango y un `tipo` conocido. Eso se sigue validando y, si falla,
+se usa el intérprete por reglas.

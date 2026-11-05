@@ -118,12 +118,8 @@ test('respaldo por respuesta inválida', async function () {
     { estado: 'ok', tipo: 'venta', cantidad: 2.5, productoId: 2 },
     { estado: 'ok', tipo: 'venta', cantidad: 1e9, productoId: 2 },
     { estado: 'ok', tipo: 'regalo', cantidad: 3, productoId: 2 },
-    { estado: 'ok', tipo: 'venta', cantidad: null, productoId: 2 },                       // ok sin cantidad
-    { estado: 'ok', tipo: 'consulta', cantidad: 3, productoId: 2 },                       // consulta no es una operación
-    { estado: 'ambiguo', tipo: 'venta', candidatosIds: [1] },                             // ambiguo con un solo candidato
     { estado: 'ambiguo', tipo: 'venta', candidatosIds: [1, 999] },
     { estado: 'ambiguo', tipo: 'venta', candidatosIds: [1, 1] },
-    { estado: 'no_entendido', tipo: 'venta' },
     { estado: 'inventado', tipo: 'venta', cantidad: 3, productoId: 2 }
   ];
   for (const m of malas) {
@@ -273,4 +269,21 @@ test('cuerpoPeticion usa el modelo por defecto y no inventa campos', function ()
   assert.strictEqual(c.model, 'openai/gpt-oss-20b');
   assert.deepStrictEqual(Object.keys(c).sort(), ['max_completion_tokens', 'messages', 'model', 'response_format', 'temperature']);
   assert.strictEqual(cuerpoPeticion({ texto: 'hola', catalogo: catalogo, esfuerzo: 'low' }).reasoning_effort, 'low');
+});
+
+test('el backend recalcula el estado cuando el modelo pone mal la etiqueta', function () {
+  // Medido contra Groq: a veces los datos vienen bien y la etiqueta mal. El estado es un
+  // resumen de los otros campos, así que lo decide el backend y la respuesta se aprovecha.
+  const casos = [
+    ['ok sin cantidad es en realidad sin_cantidad', { estado: 'ok', tipo: 'venta', cantidad: null, productoId: 2 }, 'sin_cantidad'],
+    ['sin tipo no se entendió nada', { estado: 'sin_producto', tipo: null, cantidad: null, productoId: null }, 'no_entendido'],
+    ['un solo candidato no es ambiguo', { estado: 'ambiguo', tipo: 'venta', cantidad: 2, candidatosIds: [1] }, 'sin_producto'],
+    ['con producto y cantidad está completo', { estado: 'no_entendido', tipo: 'venta', cantidad: 2, productoId: 2 }, 'ok'],
+    ['preguntar por algo que no está es sin_producto', { estado: 'consulta', tipo: 'consulta', productoId: null }, 'sin_producto']
+  ];
+  for (const [nombre, d, esperado] of casos) {
+    assert.strictEqual(validar(d, catalogo, 'x').estado, esperado, nombre);
+  }
+  // En una consulta la cantidad sobra y se descarta, para no mostrarle un número al usuario.
+  assert.strictEqual(validar({ estado: 'consulta', tipo: 'consulta', cantidad: 3, productoId: 5 }, catalogo, 'x').cantidad, null);
 });

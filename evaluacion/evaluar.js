@@ -45,8 +45,9 @@ async function main() {
     const resultado = usarIA ? await ia.interpretar(c.texto, catalogo, 0) : interpretar(c.texto, catalogo);
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
     const real = resumir(resultado, c.esperado);
-    // Si la IA no respondió y se usó el respaldo, el caso no cuenta como acierto de la IA.
-    const respaldo = usarIA && resultado.fuente !== 'ia';
+    // Si la IA falló y hubo que usar el respaldo, el caso no cuenta como acierto suyo. Una frase
+    // vacía no se le manda al modelo a propósito, y eso no es un fallo.
+    const respaldo = usarIA && resultado.fuente !== 'ia' && Boolean(resultado.motivoRespaldo);
     filas.push({ caso: c, real: real, ok: !respaldo && coincide(real, c.esperado), ms: ms, respaldo: respaldo, motivo: resultado.motivoRespaldo, uso: resultado.uso });
   }
 
@@ -78,7 +79,7 @@ async function main() {
         .map(function (e) { return e[0] + ': ' + e[1]; }).join(', ') + ')' : ''));
     const usos = filas.filter(function (f) { return f.uso; });
     if (usos.length) {
-      console.log('  Tokens informados por n8n: ' + usos.reduce(function (s, f) { return s + f.uso.entrada; }, 0) + ' de entrada, ' +
+      console.log('  Tokens informados por el proveedor: ' + usos.reduce(function (s, f) { return s + f.uso.entrada; }, 0) + ' de entrada, ' +
         usos.reduce(function (s, f) { return s + f.uso.salida; }, 0) + ' de salida (' + usos.length + ' frases)');
     }
   }
