@@ -224,6 +224,20 @@ legend { font-weight: 700; color: var(--ink); margin-bottom: .3rem; padding: 0; 
 .campos { display: grid; grid-template-columns: 2fr 1fr; gap: 0 1rem; }
 .campos fieldset { grid-column: 1 / -1; }
 
+/* Varias operaciones en una frase: cada una es un bloque aparte, con el color de su estado. */
+.operacion { border: var(--edge); border-radius: var(--radius); padding: .8rem 1rem; margin: 0 0 1rem; }
+.operacion + .operacion { margin-top: 0; }
+.operacion legend { font-weight: 700; color: var(--muted); font-size: .85rem; padding: 0 .4rem; }
+.operacion-titulo { font-weight: 700; margin: 0 0 .2rem; }
+.operacion .nota { margin: 0; }
+.btn--quitar { margin-top: .8rem; padding: .35rem .8rem; font-size: .9rem; }
+
+/* El resumen de lo guardado: una línea por operación, con su palomita o su cruz. */
+.resultados li { justify-content: flex-start; gap: .5rem; align-items: flex-start; }
+.resultados li i { color: var(--ok); flex: none; }
+.resultados li.fallida i { color: #c0392b; }
+.resultados li.fallida span { color: #c0392b; font-weight: 700; }
+
 /* ---------- Reportes ---------- */
 .ranking { list-style: none; padding: 0; margin: 0; }
 .ranking li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem .8rem; padding: .45rem 0; }

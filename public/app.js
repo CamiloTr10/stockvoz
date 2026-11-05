@@ -600,95 +600,194 @@
       .catch(function (e) { zona.innerHTML = '<div class="tarjeta"><p class="error">' + esc(e.message) + '</p></div>'; });
   }
 
-  function mostrarPropuesta(zona, r, productos, origen) {
-    // Consulta que no se pudo resolver a un solo producto: se listan los que coinciden.
-    if (r.tipo === 'consulta' && r.estado !== 'consulta') {
-      zona.innerHTML = '<div class="tarjeta propuesta propuesta--ambiguo"><h2>Consulta</h2>' +
-        (r.candidatos.length
-          ? '<p>Coinciden varios productos:</p><ul class="lista" role="list">' + r.candidatos.map(function (c) {
-              return '<li><span>' + esc(c.nombre) + '</span><span>' + c.stock + ' uds ' + badgeEstado(c.estado) + '</span></li>';
-            }).join('') + '</ul>'
-          : '<p>No encontré «' + esc(r.busqueda) + '» en el inventario.</p>') + '</div>';
-      return;
-    }
-    if (r.estado === 'consulta') {
-      zona.innerHTML = '<div class="tarjeta propuesta"><h2>Consulta</h2><p class="grande">Quedan <b>' + r.producto.stock + '</b> unidades de <b>' +
-        esc(r.producto.nombre) + '</b> ' + badgeEstado(r.producto.estado) + '</p><p class="nota">Mínimo configurado: ' + r.producto.stockMinimo + '.</p></div>';
-      return;
-    }
-    var esDueno = estado.sesion.rol === 'dueno';
-    var mensajes = {
-      ok: ['El sistema entendió:', 'Revisa y confirma. Puedes corregir cualquier dato antes de guardar.'],
-      sin_cantidad: ['Falta la cantidad', 'Entendí el producto, pero no cuántas unidades. Escríbela abajo.'],
-      ambiguo: ['¿Cuál de estos productos?', 'Hay varios productos que coinciden. Elige el correcto.'],
-      sin_producto: ['No encontré ese producto', 'No hay ningún producto activo que coincida con «' + r.busqueda + '».'],
-      no_entendido: ['No entendí la instrucción', 'Prueba con una frase como «Vendí 3 gaseosas» o «Entraron 10 panes», o completa los datos a mano.']
-    };
-    var m = mensajes[r.estado];
-    var seleccionado = r.producto ? r.producto.id : '';
+  var MENSAJES = {
+    ok: ['El sistema entendió:', 'Revisa y confirma. Puedes corregir cualquier dato antes de guardar.'],
+    sin_cantidad: ['Falta la cantidad', 'Entendí el producto, pero no cuántas unidades. Escríbela abajo.'],
+    ambiguo: ['¿Cuál de estos productos?', 'Hay varios productos que coinciden. Elige el correcto.'],
+    sin_producto: ['No encontré ese producto', 'No hay ningún producto activo que coincida.'],
+    no_entendido: ['No entendí la instrucción', 'Prueba con una frase como «Vendí 3 gaseosas» o «Entraron 10 panes», o completa los datos a mano.']
+  };
 
-    zona.innerHTML =
-      '<form class="tarjeta propuesta propuesta--' + esc(r.estado) + '" id="form-confirmar" novalidate>' +
-        '<h2>' + esc(m[0]) + '</h2><p>' + esc(m[1]) + '</p>' +
+  // Una consulta no se guarda: se responde ahí mismo.
+  function tarjetaConsulta(o) {
+    if (o.estado === 'consulta') {
+      return '<div class="tarjeta propuesta"><h2>Consulta</h2><p class="grande">Quedan <b>' + o.producto.stock +
+        '</b> unidades de <b>' + esc(o.producto.nombre) + '</b> ' + badgeEstado(o.producto.estado) +
+        '</p><p class="nota">Mínimo configurado: ' + o.producto.stockMinimo + '.</p></div>';
+    }
+    return '<div class="tarjeta propuesta propuesta--ambiguo"><h2>Consulta</h2>' +
+      (o.candidatos.length
+        ? '<p>Coinciden varios productos:</p><ul class="lista" role="list">' + o.candidatos.map(function (c) {
+            return '<li><span>' + esc(c.nombre) + '</span><span>' + c.stock + ' uds ' + badgeEstado(c.estado) + '</span></li>';
+          }).join('') + '</ul>'
+        : '<p>No encontré «' + esc(o.busqueda) + '» en el inventario.</p>') + '</div>';
+  }
+
+  // Una operación editable. `i` numera los campos para que cada fila tenga sus propios id.
+  function filaOperacion(o, i, total, productos, esDueno) {
+    var m = MENSAJES[o.estado] || MENSAJES.no_entendido;
+    var seleccionado = o.producto ? o.producto.id : '';
+    var explicacion = o.estado === 'sin_producto' && o.busqueda
+      ? 'No hay ningún producto activo que coincida con «' + o.busqueda + '».'
+      : m[1];
+    return '<fieldset class="operacion propuesta--' + esc(o.estado) + '" data-fila="' + i + '">' +
+      (total > 1 ? '<legend>Operación ' + (i + 1) + ' de ' + total + '</legend>' : '') +
+      '<p class="operacion-titulo">' + esc(m[0]) + '</p>' +
+      '<p class="nota">' + esc(explicacion) + '</p>' +
+      (o.estado === 'ambiguo'
+        ? '<div class="ejemplos">' + o.candidatos.map(function (c) {
+            return '<button type="button" class="chip" data-candidato="' + c.id + '" data-fila="' + i + '">' +
+              esc(c.nombre) + ' · ' + c.stock + ' uds</button>';
+          }).join('') + '</div>'
+        : '') +
+      (o.estado === 'sin_producto' && esDueno && o.busqueda
+        ? '<p><a class="btn btn--blanco" href="#/inventario?nuevo=' + encodeURIComponent(o.busqueda) + '">Crear «' + esc(o.busqueda) + '» en el inventario</a></p>'
+        : '') +
+      '<div class="campos">' +
+        '<div><label for="c-producto-' + i + '">Producto</label><select id="c-producto-' + i + '" required>' +
+          '<option value="">Elige un producto</option>' +
+          productos.map(function (p) {
+            return '<option value="' + p.id + '"' + (p.id === seleccionado ? ' selected' : '') + '>' +
+              esc(p.nombre) + ' (' + p.stock + ' uds)</option>';
+          }).join('') + '</select></div>' +
+        '<div><label for="c-cantidad-' + i + '">Cantidad</label><input id="c-cantidad-' + i +
+          '" type="number" inputmode="numeric" min="1" max="100000" step="1" value="' + (o.cantidad || '') + '" required></div>' +
+        '<fieldset><legend>Tipo</legend>' + Object.keys(TIPOS).map(function (t) {
+          return '<label class="radio"><input type="radio" name="c-tipo-' + i + '" value="' + t + '"' +
+            ((o.tipo || 'venta') === t ? ' checked' : '') + '> ' + TIPOS[t] + '</label>';
+        }).join('') + '</fieldset>' +
+      '</div>' +
+      (total > 1 ? '<button type="button" class="btn btn--blanco btn--quitar" data-quitar="' + i + '">Quitar esta</button>' : '') +
+      '</fieldset>';
+  }
+
+  function mostrarPropuesta(zona, r, productos, origen) {
+    var esDueno = estado.sesion.rol === 'dueno';
+    var operaciones = r.operaciones || [];
+    var consultas = operaciones.filter(function (o) { return o.tipo === 'consulta'; });
+    var movimientos = operaciones.filter(function (o) { return o.tipo !== 'consulta'; });
+    var html = consultas.map(tarjetaConsulta).join('');
+
+    // Solo consultas: no hay nada que confirmar.
+    if (!movimientos.length && consultas.length) { zona.innerHTML = html; return; }
+    // Ni consultas ni movimientos: una fila en blanco para completarla a mano.
+    if (!movimientos.length) {
+      movimientos = [{ estado: 'no_entendido', tipo: null, cantidad: null, producto: null, candidatos: [], busqueda: '' }];
+    }
+
+    var total = movimientos.length;
+    zona.innerHTML = html +
+      '<form class="tarjeta propuesta" id="form-confirmar" novalidate>' +
+        (total > 1 ? '<h2>Entendí ' + total + ' operaciones</h2><p>Revísalas y confirma. Puedes corregir o quitar cualquiera antes de guardar.</p>' : '') +
         (r.texto ? '<p class="frase">«' + esc(r.texto) + '»</p>' : '') +
-        (r.estado === 'ambiguo'
-          ? '<div class="ejemplos">' + r.candidatos.map(function (c) {
-              return '<button type="button" class="chip" data-candidato="' + c.id + '">' + esc(c.nombre) + ' · ' + c.stock + ' uds</button>';
-            }).join('') + '</div>'
-          : '') +
-        (r.estado === 'sin_producto' && esDueno && r.busqueda
-          ? '<p><a class="btn btn--blanco" href="#/inventario?nuevo=' + encodeURIComponent(r.busqueda) + '">Crear «' + esc(r.busqueda) + '» en el inventario</a></p>'
-          : '') +
-        '<div class="campos">' +
-          '<div><label for="c-producto">Producto</label><select id="c-producto" required><option value="">Elige un producto</option>' +
-            productos.map(function (p) {
-              return '<option value="' + p.id + '"' + (p.id === seleccionado ? ' selected' : '') + '>' + esc(p.nombre) + ' (' + p.stock + ' uds)</option>';
-            }).join('') + '</select></div>' +
-          '<div><label for="c-cantidad">Cantidad</label><input id="c-cantidad" type="number" inputmode="numeric" min="1" max="100000" step="1" value="' + (r.cantidad || '') + '" required></div>' +
-          '<fieldset><legend>Tipo</legend>' + Object.keys(TIPOS).map(function (t) {
-            return '<label class="radio"><input type="radio" name="c-tipo" value="' + t + '"' + ((r.tipo || 'venta') === t ? ' checked' : '') + '> ' + TIPOS[t] + '</label>';
-          }).join('') + '</fieldset>' +
-        '</div>' +
+        movimientos.map(function (o, i) { return filaOperacion(o, i, total, productos, esDueno); }).join('') +
         '<div id="error-confirmar"></div>' +
-        '<div class="acciones"><button class="btn btn--grande" type="submit">Confirmar y guardar</button>' +
+        '<div class="acciones"><button class="btn btn--grande" type="submit">' +
+          (total > 1 ? 'Confirmar y guardar las ' + total : 'Confirmar y guardar') + '</button>' +
         '<button class="btn btn--blanco" type="button" id="cancelar">Cancelar</button></div>' +
       '</form>';
 
     var form = document.getElementById('form-confirmar');
+
     form.querySelectorAll('[data-candidato]').forEach(function (b) {
       b.addEventListener('click', function () {
-        form.querySelector('#c-producto').value = b.getAttribute('data-candidato');
-        form.querySelector('#c-cantidad').focus();
+        var i = b.getAttribute('data-fila');
+        form.querySelector('#c-producto-' + i).value = b.getAttribute('data-candidato');
+        form.querySelector('#c-cantidad-' + i).focus();
       });
     });
+
+    form.querySelectorAll('[data-quitar]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var bloque = form.querySelector('[data-fila="' + b.getAttribute('data-quitar') + '"]');
+        if (bloque) { bloque.remove(); }
+        if (!form.querySelector('[data-fila]')) { zona.innerHTML = ''; document.getElementById('instruccion').focus(); }
+      });
+    });
+
     document.getElementById('cancelar').addEventListener('click', function () {
       zona.innerHTML = '';
       document.getElementById('instruccion').focus();
     });
+
     form.addEventListener('submit', function (ev) {
       ev.preventDefault();
       var zonaError = document.getElementById('error-confirmar');
-      var productoId = Number(form.querySelector('#c-producto').value);
-      var cantidad = Number(form.querySelector('#c-cantidad').value);
-      var tipo = (form.querySelector('input[name=c-tipo]:checked') || {}).value;
-      if (!productoId) { errorEn(zonaError, 'Elige el producto.'); form.querySelector('#c-producto').focus(); return; }
-      if (!Number.isInteger(cantidad) || cantidad < 1) { errorEn(zonaError, 'La cantidad debe ser un número entero mayor que cero.'); form.querySelector('#c-cantidad').focus(); return; }
+      var filas = [];
+      var problema = null;
+      form.querySelectorAll('[data-fila]').forEach(function (bloque) {
+        if (problema) { return; }
+        var i = bloque.getAttribute('data-fila');
+        var productoId = Number(form.querySelector('#c-producto-' + i).value);
+        var cantidad = Number(form.querySelector('#c-cantidad-' + i).value);
+        var tipo = (form.querySelector('input[name="c-tipo-' + i + '"]:checked') || {}).value;
+        if (!productoId) { problema = { campo: '#c-producto-' + i, texto: 'Elige el producto.' }; return; }
+        if (!Number.isInteger(cantidad) || cantidad < 1) {
+          problema = { campo: '#c-cantidad-' + i, texto: 'La cantidad debe ser un número entero mayor que cero.' };
+          return;
+        }
+        filas.push({ productoId: productoId, cantidad: cantidad, tipo: tipo });
+      });
+      if (problema) { errorEn(zonaError, problema.texto); form.querySelector(problema.campo).focus(); return; }
+      if (!filas.length) { return; }
+
       var boton = form.querySelector('button[type=submit]');
       boton.disabled = true; // evita guardar dos veces con doble clic
-      api('POST', '/api/movimientos', { productoId: productoId, cantidad: cantidad, tipo: tipo, origen: origen, textoOriginal: r.texto })
-        .then(function (mov) { mostrarGuardado(zona, mov); })
-        .catch(function (e) { errorEn(zonaError, e.message); boton.disabled = false; });
+      guardarOperaciones(filas, origen, r.texto).then(function (resultados) {
+        mostrarGuardado(zona, resultados);
+      });
     });
-    if (r.estado === 'ok') { form.querySelector('button[type=submit]').focus(); } else { zona.scrollIntoView({ block: 'nearest' }); }
+
+    var primera = form.querySelector('[data-fila]');
+    if (total === 1 && movimientos[0].estado === 'ok') { form.querySelector('button[type=submit]').focus(); }
+    else { (primera || zona).scrollIntoView({ block: 'nearest' }); }
   }
 
-  function mostrarGuardado(zona, mov) {
-    var p = mov.producto;
-    zona.innerHTML = '<div class="tarjeta propuesta propuesta--guardado"><h2><i class="material-icons" aria-hidden="true">check_circle</i> ' +
-      esc(TIPOS[mov.tipo]) + ' registrada</h2>' +
-      '<p class="grande">' + esc(p.nombre) + ' · ' + mov.cantidad + ' uds. Stock: ' + mov.stockAnterior + ' → <b>' + p.stock + '</b> ' + badgeEstado(p.estado) + '</p>' +
-      (p.estado !== 'ok' ? '<p class="alerta">Atención: ' + esc(p.nombre) + ' quedó por debajo de su mínimo (' + p.stockMinimo + ').</p>' : '') +
-      '<div class="acciones"><button type="button" class="btn" id="otro">Registrar otro</button><a class="btn btn--blanco" href="#/panel">Ir al inicio</a></div></div>';
+  // Se guardan de a una y en orden, no en paralelo: dos operaciones sobre el mismo producto
+  // tienen que verse una a la otra para que el stock cuadre. Cada una vive o muere sola, así
+  // que un fallo no se lleva por delante las que sí sirven.
+  function guardarOperaciones(filas, origen, texto) {
+    var resultados = [];
+    return filas.reduce(function (cadena, f) {
+      return cadena.then(function () {
+        return api('POST', '/api/movimientos', {
+          productoId: f.productoId, cantidad: f.cantidad, tipo: f.tipo, origen: origen, textoOriginal: texto
+        })
+          .then(function (mov) { resultados.push({ ok: true, mov: mov }); })
+          .catch(function (e) { resultados.push({ ok: false, error: e.message }); });
+      });
+    }, Promise.resolve()).then(function () { return resultados; });
+  }
+
+  function mostrarGuardado(zona, resultados) {
+    var guardadas = resultados.filter(function (x) { return x.ok; });
+    var fallidas = resultados.length - guardadas.length;
+    var titulo = resultados.length === 1
+      ? (guardadas.length ? esc(TIPOS[guardadas[0].mov.tipo]) + ' registrada' : 'No se pudo guardar')
+      : 'Guardé ' + guardadas.length + ' de ' + resultados.length;
+
+    var filas = resultados.map(function (x) {
+      if (!x.ok) {
+        return '<li class="fallida"><i class="material-icons" aria-hidden="true">error</i> <span>' + esc(x.error) + '</span></li>';
+      }
+      var p = x.mov.producto;
+      return '<li><i class="material-icons" aria-hidden="true">check_circle</i> <span>' +
+        esc(TIPOS[x.mov.tipo]) + ' · ' + esc(p.nombre) + ' · ' + x.mov.cantidad + ' uds. Stock: ' +
+        x.mov.stockAnterior + ' → <b>' + p.stock + '</b> ' + badgeEstado(p.estado) + '</span></li>';
+    }).join('');
+
+    var bajos = guardadas.map(function (x) { return x.mov.producto; })
+      .filter(function (p) { return p.estado !== 'ok'; })
+      .map(function (p) { return '<p class="alerta">Atención: ' + esc(p.nombre) + ' quedó por debajo de su mínimo (' + p.stockMinimo + ').</p>'; })
+      .join('');
+
+    zona.innerHTML = '<div class="tarjeta propuesta propuesta--' + (fallidas ? 'sin_producto' : 'guardado') + '">' +
+      '<h2>' + (fallidas ? '' : '<i class="material-icons" aria-hidden="true">check_circle</i> ') + titulo + '</h2>' +
+      '<ul class="lista resultados" role="list">' + filas + '</ul>' + bajos +
+      (fallidas ? '<p class="nota">Lo que falló no se guardó. Vuelve a dictarlo corrigiendo el dato.</p>' : '') +
+      '<div class="acciones"><button type="button" class="btn" id="otro">Registrar otro</button>' +
+      '<a class="btn btn--blanco" href="#/panel">Ir al inicio</a></div></div>';
+
     var entrada = document.getElementById('instruccion');
     entrada.value = '';
     document.getElementById('otro').addEventListener('click', function () { zona.innerHTML = ''; entrada.focus(); });

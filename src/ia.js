@@ -9,11 +9,10 @@
 // falla (caído, lento, respuesta rara, producto ajeno), responde con las reglas. La IA solo
 // propone; quien guarda es POST /api/movimientos, después de que el usuario confirma.
 // El formato de la petición y de la respuesta está en docs/contrato-n8n.md.
-const { interpretar } = require('./interprete');
+const { interpretar, MAX_OPERACIONES } = require('./interprete');
 const { fechaLocal, MAX_CANTIDAD } = require('./inventario');
 const instruccionesIA = require('./ia-instrucciones');
 
-const ESTADOS = ['ok', 'consulta', 'ambiguo', 'sin_producto', 'sin_cantidad', 'no_entendido'];
 const OPERACIONES = ['venta', 'entrada', 'merma'];
 const MAX_RESPUESTA = 16 * 1024;
 const MAX_CANDIDATOS = 5;
@@ -24,7 +23,7 @@ function fallo(motivo, mensaje) {
   return e;
 }
 
-// El estado es un resumen de los otros campos, así que lo calcula el backend en vez de creerle
+// El estado es un resumen de los otros campos, así que lo calcula el backend en vez de pedírselo
 // al modelo: midiendo se vio que a veces los datos venían bien y la etiqueta mal ("vendí arroz"
 // llegaba como ok y sin cantidad, cuando eso es sin_cantidad).
 function estadoSegunCampos(tipo, producto, cantidad, candidatos) {
@@ -34,38 +33,53 @@ function estadoSegunCampos(tipo, producto, cantidad, candidatos) {
   return cantidad === null ? 'sin_cantidad' : 'ok';
 }
 
-// Convierte la respuesta del modelo en el mismo formato que devuelve interpretar(), o lanza
-// un error 'invalida' si no es una respuesta que el backend acepte.
-function validar(d, catalogo, texto) {
-  const invalida = function (m) { return fallo('invalida', m); };
-  if (!d || typeof d !== 'object' || Array.isArray(d)) { throw invalida('la respuesta no es un objeto'); }
-  // El estado se exige para no tragarse una respuesta vacía, pero abajo se recalcula.
-  if (ESTADOS.indexOf(d.estado) === -1) { throw invalida('estado desconocido'); }
+// Valida UNA operación de la lista. `buscar` solo encuentra productos del catálogo que se envió,
+// así que una operación nunca puede nombrar un producto de otro negocio.
+function validarOperacion(d, buscar, invalida) {
+  if (!d || typeof d !== 'object' || Array.isArray(d)) { throw invalida('la operación no es un objeto'); }
   const tipo = d.tipo === undefined ? null : d.tipo;
   if (tipo !== null && tipo !== 'consulta' && OPERACIONES.indexOf(tipo) === -1) { throw invalida('tipo desconocido'); }
   const cantidad = d.cantidad === undefined ? null : d.cantidad;
   if (cantidad !== null && (!Number.isInteger(cantidad) || cantidad < 1 || cantidad > MAX_CANTIDAD)) { throw invalida('cantidad fuera de rango'); }
-
-  // Solo se aceptan productos del catálogo que se le envió: así nunca aparece uno de otro negocio.
-  const porId = new Map(catalogo.map(function (p) { return [p.id, p]; }));
-  const buscar = function (id) {
-    const p = porId.get(id);
-    if (!p) { throw invalida('producto que no está en el catálogo'); }
-    return p;
-  };
   const producto = d.productoId === undefined || d.productoId === null ? null : buscar(d.productoId);
   const ids = d.candidatosIds === undefined ? [] : d.candidatosIds;
   if (!Array.isArray(ids) || ids.length > MAX_CANDIDATOS || new Set(ids).size !== ids.length) { throw invalida('candidatos inválidos'); }
   const candidatos = ids.map(buscar);
 
   const estado = estadoSegunCampos(tipo, producto, cantidad, candidatos);
-  // En consulta y no_entendido la cantidad no significa nada: se descarta para no confundir.
-  const cantidadFinal = estado === 'consulta' || estado === 'no_entendido' ? null : cantidad;
-
-  const resultado = {
-    estado: estado, tipo: tipo, cantidad: cantidadFinal, producto: producto, candidatos: candidatos,
-    busqueda: typeof d.busqueda === 'string' ? d.busqueda.trim().slice(0, 120) : '', texto: texto
+  return {
+    estado: estado,
+    tipo: tipo,
+    // En consulta y no_entendido la cantidad no significa nada: se descarta para no confundir.
+    cantidad: estado === 'consulta' || estado === 'no_entendido' ? null : cantidad,
+    producto: producto,
+    candidatos: candidatos,
+    busqueda: typeof d.busqueda === 'string' ? d.busqueda.trim().slice(0, 120) : ''
   };
+}
+
+// Convierte la respuesta del modelo en el mismo formato que devuelve interpretar(), o lanza
+// un error 'invalida' si no es una respuesta que el backend acepte.
+function validar(d, catalogo, texto) {
+  const invalida = function (m) { return fallo('invalida', m); };
+  if (!d || typeof d !== 'object' || Array.isArray(d)) { throw invalida('la respuesta no es un objeto'); }
+  // Se exige la lista para no tragarse una respuesta vacía como si fuera "no entendí".
+  if (!Array.isArray(d.operaciones)) { throw invalida('falta la lista de operaciones'); }
+  if (d.operaciones.length > MAX_OPERACIONES) { throw invalida('demasiadas operaciones'); }
+
+  const porId = new Map(catalogo.map(function (p) { return [p.id, p]; }));
+  const buscar = function (id) {
+    const p = porId.get(id);
+    if (!p) { throw invalida('producto que no está en el catálogo'); }
+    return p;
+  };
+
+  const operaciones = d.operaciones
+    .map(function (o) { return validarOperacion(o, buscar, invalida); })
+    // Una operación sin tipo no se puede ni mostrar ni guardar: solo estorbaría en la pantalla.
+    .filter(function (o) { return o.estado !== 'no_entendido'; });
+
+  const resultado = { operaciones: operaciones, texto: texto };
   const uso = d.uso;
   if (uso && Number.isInteger(uso.entrada) && Number.isInteger(uso.salida) && uso.entrada >= 0 && uso.salida >= 0) {
     resultado.uso = { entrada: uso.entrada, salida: uso.salida };

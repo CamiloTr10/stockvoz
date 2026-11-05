@@ -44,11 +44,11 @@ async function main() {
     const t0 = process.hrtime.bigint();
     const resultado = usarIA ? await ia.interpretar(c.texto, catalogo, 0) : interpretar(c.texto, catalogo);
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-    const real = resumir(resultado, c.esperado);
+    const real = resumir(resultado, c.esperadas);
     // Si la IA falló y hubo que usar el respaldo, el caso no cuenta como acierto suyo. Una frase
     // vacía no se le manda al modelo a propósito, y eso no es un fallo.
     const respaldo = usarIA && resultado.fuente !== 'ia' && Boolean(resultado.motivoRespaldo);
-    filas.push({ caso: c, real: real, ok: !respaldo && coincide(real, c.esperado), ms: ms, respaldo: respaldo, motivo: resultado.motivoRespaldo, uso: resultado.uso });
+    filas.push({ caso: c, real: real, ok: !respaldo && coincide(real, c.esperadas), ms: ms, respaldo: respaldo, motivo: resultado.motivoRespaldo, uso: resultado.uso });
   }
 
   const categorias = {};
@@ -90,7 +90,7 @@ async function main() {
       console.log('\nFallos (' + fallos.length + '):');
       fallos.forEach(function (f) {
         console.log('  [' + f.caso.categoria + '] «' + f.caso.texto + '»' + (f.respaldo ? '  (respaldo: ' + f.motivo + ')' : ''));
-        console.log('      esperado ' + JSON.stringify(f.caso.esperado));
+        console.log('      esperado ' + JSON.stringify(f.caso.esperadas));
         console.log('      obtenido ' + JSON.stringify(f.real));
       });
     }

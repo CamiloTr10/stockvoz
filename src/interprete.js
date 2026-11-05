@@ -114,9 +114,9 @@ function puntuar(producto, palabras) {
  * @returns {{estado:string,tipo:?string,cantidad:?number,producto:?object,candidatos:object[],busqueda:string,texto:string}}
  *   estado: ok | consulta | ambiguo | sin_producto | sin_cantidad | no_entendido
  */
-function interpretar(texto, catalogo) {
-  const resultado = { estado: 'no_entendido', tipo: null, cantidad: null, producto: null, candidatos: [], busqueda: '', texto: String(texto || '').trim() };
-  const normal = normalizar(resultado.texto);
+function interpretarUna(texto, catalogo) {
+  const resultado = { estado: 'no_entendido', tipo: null, cantidad: null, producto: null, candidatos: [], busqueda: '' };
+  const normal = normalizar(texto);
   if (!normal) { return resultado; }
 
   const toks = normal.split(' ');
@@ -155,4 +155,58 @@ function interpretar(texto, catalogo) {
   return resultado;
 }
 
-module.exports = { interpretar, normalizar };
+
+// Una frase de mostrador no dice más de cinco cosas.
+const MAX_OPERACIONES = 5;
+
+// Conectores por los que puede venir más de una operación.
+const CONECTORES = /([ ]+y[ ]+|[ ]+e[ ]+|[ ]*;[ ]*|[ ]*,[ ]*)/;
+
+// Parte la frase y vuelve a pegar los pedazos que no traen verbo de movimiento, con su
+// separador. Así "treinta y cinco borradores" no se parte (el pedazo "cinco borradores" no
+// tiene verbo) y "1,5" sigue siendo un número.
+// shortcut: si el tendero omite el verbo ("vendí 2 borradores y 3 lápices") queda una sola
+// operación; el modelo sí la separa. Juntar de más es preferible a separar mal, porque separar
+// mal inventaría operaciones que el tendero no dijo. Si hiciera falta, habría que heredar el
+// verbo del pedazo anterior sin confundirlo con los números compuestos.
+function partir(texto) {
+  const trozos = String(texto).split(CONECTORES);
+  // Cada parte guarda el separador que la sigue, para poder volver a pegarla tal cual.
+  const partes = [{ texto: trozos[0] || '', sep: '' }];
+  for (let i = 1; i < trozos.length; i += 2) {
+    const pieza = trozos[i + 1] || '';
+    const ultima = partes[partes.length - 1];
+    if (detectarTipo(normalizar(pieza))) {
+      ultima.sep = trozos[i];
+      partes.push({ texto: pieza, sep: '' });
+    } else {
+      ultima.texto += trozos[i] + pieza;
+    }
+  }
+  // Un primer pedazo sin verbo nombra el producto del que habla el verbo que viene después
+  // ("quedé sin arroz, vendí los últimos 5"): se pega al siguiente en vez de perderse.
+  if (partes.length > 1 && !detectarTipo(normalizar(partes[0].texto))) {
+    partes[1].texto = partes[0].texto + partes[0].sep + partes[1].texto;
+    partes.shift();
+  }
+  return partes
+    .map(function (p) { return p.texto; })
+    .filter(function (p) { return normalizar(p); });
+}
+
+/**
+ * Interpreta una instrucción, que puede traer varias operaciones.
+ * @param {string} texto  instrucción del usuario
+ * @param {{id:number,nombre:string}[]} catalogo  productos activos del negocio
+ * @returns {{operaciones:object[],texto:string}}  lista vacía si no se entendió nada
+ */
+function interpretar(texto, catalogo) {
+  const limpio = String(texto || '').trim();
+  const operaciones = partir(limpio)
+    .map(function (p) { return interpretarUna(p, catalogo); })
+    .filter(function (o) { return o.estado !== 'no_entendido'; })
+    .slice(0, MAX_OPERACIONES);
+  return { operaciones: operaciones, texto: limpio };
+}
+
+module.exports = { interpretar, interpretarUna, normalizar, MAX_OPERACIONES };

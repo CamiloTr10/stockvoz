@@ -10,10 +10,10 @@ const { catalogo, casos } = cargarCasos();
 
 casos.filter(function (c) { return c.regresion; }).forEach(function (c) {
   test('"' + c.texto + '"', function () {
-    assert.deepStrictEqual(resumir(interpretar(c.texto, catalogo), c.esperado), c.esperado);
+    assert.deepStrictEqual(resumir(interpretar(c.texto, catalogo), c.esperadas), c.esperadas);
   });
 });
 
 test('la búsqueda conserva lo que no se encontró', function () {
-  assert.strictEqual(interpretar('vendí 2 chocolatinas jet', catalogo).busqueda, 'chocolatinas jet');
+  assert.strictEqual(interpretar('vendí 2 chocolatinas jet', catalogo).operaciones[0].busqueda, 'chocolatinas jet');
 });

@@ -106,9 +106,10 @@ test('flujo completo: interpretar, confirmar y ver el stock actualizado', async 
   const s = await ingresar('demo@stockvoz.test');
   await elegir(s.api, s.sesion, 'Tienda');
   const i = await s.api('POST', '/api/interpretar', { texto: 'Vendí 2 panes tajados' });
-  assert.strictEqual(i.datos.estado, 'ok');
-  const antes = i.datos.producto.stock;
-  const m = await s.api('POST', '/api/movimientos', { productoId: i.datos.producto.id, tipo: i.datos.tipo, cantidad: i.datos.cantidad, origen: 'texto', textoOriginal: 'Vendí 2 panes tajados' });
+  const op = i.datos.operaciones[0];
+  assert.strictEqual(op.estado, 'ok');
+  const antes = op.producto.stock;
+  const m = await s.api('POST', '/api/movimientos', { productoId: op.producto.id, tipo: op.tipo, cantidad: op.cantidad, origen: 'texto', textoOriginal: 'Vendí 2 panes tajados' });
   assert.strictEqual(m.estado, 201, JSON.stringify(m.datos));
   assert.strictEqual(m.datos.producto.stock, antes - 2);
   const lista = await s.api('GET', '/api/movimientos?limite=1');
@@ -189,7 +190,7 @@ test('un producto desactivado no admite movimientos ni aparece al interpretar', 
   const p = (await s.api('POST', '/api/productos', { nombre: 'Velas', precio: 500, stock: 10 })).datos;
   await s.api('PATCH', '/api/productos/' + p.id, { activo: false });
   assert.strictEqual((await s.api('POST', '/api/movimientos', { productoId: p.id, tipo: 'venta', cantidad: 1 })).estado, 409);
-  assert.strictEqual((await s.api('POST', '/api/interpretar', { texto: 'vendí 2 velas' })).datos.estado, 'sin_producto');
+  assert.strictEqual((await s.api('POST', '/api/interpretar', { texto: 'vendí 2 velas' })).datos.operaciones[0].estado, 'sin_producto');
 });
 
 test('registro de un negocio nuevo: queda vacío y separado de los demás', async function () {
@@ -246,12 +247,13 @@ test('interpretar usa la IA cuando n8n responde bien y marca la fuente', async f
   const pan = (await s.api('GET', '/api/productos')).datos.find(function (p) { return p.nombre === 'Pan tajado'; });
   manejadorIA = function (req, res) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ estado: 'ok', tipo: 'venta', cantidad: 2, productoId: pan.id, candidatosIds: [], busqueda: '' }));
+    res.end(JSON.stringify({ operaciones: [{ tipo: 'venta', cantidad: 2, productoId: pan.id, candidatosIds: [], busqueda: '' }] }));
   };
   const r = await s.api('POST', '/api/interpretar', { texto: 'despaché dos pancitos' });
   assert.strictEqual(r.estado, 200);
-  assert.deepStrictEqual([r.datos.fuente, r.datos.estado, r.datos.cantidad, r.datos.producto.id], ['ia', 'ok', 2, pan.id]);
-  assert.strictEqual(r.datos.producto.stock, pan.stock, 'el producto trae los datos reales del inventario, no los de la IA');
+  const o = r.datos.operaciones[0];
+  assert.deepStrictEqual([r.datos.fuente, o.estado, o.cantidad, o.producto.id], ['ia', 'ok', 2, pan.id]);
+  assert.strictEqual(o.producto.stock, pan.stock, 'el producto trae los datos reales del inventario, no los de la IA');
 });
 
 test('la IA no puede nombrar un producto de otro negocio y a n8n solo le llega el catálogo del negocio', async function () {
@@ -276,7 +278,7 @@ test('si n8n falla, interpretar sigue funcionando con las reglas', async functio
   manejadorIA = function (req, res) { res.writeHead(500); res.end(); };
   const r = await s.api('POST', '/api/interpretar', { texto: 'vendí 2 panes tajados' });
   assert.strictEqual(r.estado, 200);
-  assert.deepStrictEqual([r.datos.fuente, r.datos.motivoRespaldo, r.datos.estado], ['reglas', 'http', 'ok']);
+  assert.deepStrictEqual([r.datos.fuente, r.datos.motivoRespaldo, r.datos.operaciones[0].estado], ['reglas', 'http', 'ok']);
 });
 
 // ---------- Anular movimientos ----------
