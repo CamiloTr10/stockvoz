@@ -301,13 +301,17 @@ tenga cuenta o no.
 
 | Hoy | Por qué | Siguiente paso |
 |---|---|---|
-| Intérprete por reglas como respaldo, y la IA vía n8n opcional (`STOCKVOZ_IA=1`) | Funciona sin claves de API ni costos y es fácil de probar | Armar el flujo de n8n según [docs/contrato-n8n.md](docs/contrato-n8n.md) y elegir el modelo con `npm run evaluar -- --ia` |
+| Intérprete por reglas como respaldo, y la IA vía n8n (`STOCKVOZ_IA=n8n`) | La app de un tendero no puede dejar de funcionar porque se cayó un proveedor | Rehacer el banco con frases grabadas a tenderos reales |
 | Web Speech API del navegador | Dictado gratis en Chrome/Edge | Procesar audio en el servidor (por ejemplo Whisper) si se necesita en otros navegadores o en WhatsApp |
-| Una operación por frase | Suficiente para el MVP | Frases compuestas («vendí 3 y se dañaron 2») |
+| El intérprete por reglas no separa frases con el verbo omitido («vendí 2 panes y 3 leches») | Juntar de más es preferible a separar mal, que inventaría operaciones | Heredar el verbo del pedazo anterior sin confundirlo con los números compuestos |
+| El nodo HTTP de n8n no bloquea redirecciones, el modo directo sí | La URL es fija, el riesgo es bajo | Igualarlo al modo directo |
+
+El calendario completo hasta la sustentación, con riesgos y plan B del demo, está en
+[docs/plan-hasta-la-sustentacion.md](docs/plan-hasta-la-sustentacion.md).
 
 ## Qué sigue, por rol del equipo
 
 - **Backend y base de datos (Gabriel):** revisar el esquema de `migraciones/001_esquema_inicial.sql`; revisar la estrategia multi-tenant (filtrado por `negocio_id` en todas las consultas, o Row Level Security).
-- **IA y automatización (Nicolás):** flujo en n8n que reciba el texto, llame al modelo de lenguaje y devuelva `{estado, tipo, producto, cantidad}`; usar las pruebas de `test/interprete.test.js` como casos de evaluación.
-- **Frontend (Camilo):** convertir la interfaz en PWA instalable y probar con usuarios reales desde el celular.
-- **UX y documentación (David):** pruebas de usabilidad con tenderos usando las cuentas demo; documentar los hallazgos de la investigación de usuarios y ajustar los textos de error.
+- **IA y automatización (Nicolás):** el flujo de n8n ya está armado y generado desde `src/ia-instrucciones.js`; sigue afinar las instrucciones midiendo con `npm run evaluar -- --ia` contra frases reales.
+- **Frontend (Camilo):** la PWA ya está; probarla instalada en un celular queda aplazado hasta que haya despliegue con HTTPS.
+- **UX y documentación (David):** grabar frases de tenderos reales para rehacer `evaluacion/casos.json`, que hoy son frases nuestras. Es lo que más sube la nota por hora invertida. Luego, pruebas de usabilidad con las cuentas demo y ajustar los textos de error.
