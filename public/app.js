@@ -508,7 +508,6 @@
   }
 
   /* ---------- Registrar movimiento (voz o texto) ---------- */
-  var EJEMPLOS = ['Vendí 3 gaseosas de 400', 'Entraron 24 huevos', 'Se dañaron 2 panes', '¿Cuánto queda de arroz?'];
 
   function vistaRegistrar() {
     var motor = motorDeVoz();
@@ -519,16 +518,14 @@
         (motor
           ? '<button type="button" class="mic" id="mic" aria-pressed="false" aria-describedby="mic-ayuda">' +
               '<i class="material-icons" aria-hidden="true">mic</i><span id="mic-texto">Toca y habla</span></button>' +
-            '<p class="nota" id="mic-ayuda">Por ejemplo: «Vendí 3 gaseosas de 400». Toca otra vez para terminar.</p>'
+            '<p class="nota" id="mic-ayuda">Di lo que pasó en tu tienda. Toca otra vez para terminar.</p>'
           : '<p class="nota" id="mic-ayuda">Este navegador no permite dictar. Escribe la instrucción.</p>') +
         '<form id="form-texto" class="fila-instruccion" novalidate>' +
           '<label for="instruccion" class="' + (motor ? 'visually-hidden' : '') + '">Instrucción</label>' +
-          '<input id="instruccion" maxlength="300" autocomplete="off" placeholder="O escribe: Se vendieron 6 panes">' +
+          '<input id="instruccion" maxlength="300" autocomplete="off" placeholder="O escribe lo que pasó">' +
           '<button class="btn" type="submit">Interpretar</button>' +
         '</form>' +
-        '<div class="ejemplos" aria-label="Ejemplos">' + EJEMPLOS.map(function (e) {
-          return '<button type="button" class="chip" data-ejemplo="' + esc(e) + '">' + esc(e) + '</button>';
-        }).join('') + '</div>' +
+        '<div class="ejemplos" id="ejemplos" aria-label="Ejemplos"></div>' +
       '</section>' +
       '<section id="resultado" aria-live="polite"></section>', 'Registrar movimiento');
 
@@ -539,11 +536,52 @@
       ev.preventDefault();
       interpretar(entrada.value, 'texto');
     });
-    vista.querySelectorAll('[data-ejemplo]').forEach(function (b) {
-      b.addEventListener('click', function () { entrada.value = b.getAttribute('data-ejemplo'); interpretar(entrada.value, 'texto'); });
-    });
-
     prepararDictado(motor, entrada, function (texto) { interpretar(texto, 'voz'); });
+
+    // Los ejemplos se arman con los productos del propio negocio. Unos ejemplos de gaseosas a
+    // quien solo vende papelería no enseñan nada, y al tocarlos la app contesta que no encuentra
+    // el producto: pésima primera impresión en la pantalla principal.
+    api('GET', '/api/productos')
+      .then(function (productos) { pintarEjemplos(productos, entrada); })
+      .catch(function () { /* sin ejemplos se puede escribir igual */ });
+  }
+
+  // Tres ejemplos con productos distintos y una consulta, para que se vea que también responde
+  // preguntas. El nombre va en minúscula y tal cual: así siempre coincide con el catálogo.
+  function ejemplosDe(productos) {
+    var nombre = function (i) { return productos[i % productos.length].nombre.toLowerCase(); };
+    var lista = ['Vendí 3 ' + nombre(0)];
+    if (productos.length > 1) { lista.push('Entraron 10 ' + nombre(1)); }
+    if (productos.length > 2) { lista.push('Se dañaron 2 ' + nombre(2)); }
+    lista.push('¿Cuánto queda de ' + nombre(0) + '?');
+    return lista;
+  }
+
+  function pintarEjemplos(productos, entrada) {
+    var zona = document.getElementById('ejemplos');
+    if (!zona) { return; }
+    var activos = (productos || []).filter(function (p) { return p.activo !== false; });
+    if (!activos.length) {
+      // Sin productos no se puede registrar nada: mejor decirlo aquí que dejar que lo descubra.
+      zona.innerHTML = '<p class="nota">Todavía no tienes productos, así que no hay nada que ' +
+        'registrar. <a href="#/inventario?nuevo=1">Crea el primero en Inventario</a> y vuelve.</p>';
+      return;
+    }
+    var lista = ejemplosDe(activos);
+    // La ayuda del micrófono y el marcador del campo también nombran productos: si hablan de
+    // gaseosas a quien vende papelería, enseñan a decir frases que no van a funcionar.
+    var ayuda = document.getElementById('mic-ayuda');
+    if (ayuda) { ayuda.textContent = 'Por ejemplo: «' + lista[0] + '». Toca otra vez para terminar.'; }
+    if (entrada) { entrada.placeholder = 'O escribe: ' + (lista[1] || lista[0]); }
+    zona.innerHTML = lista.map(function (e) {
+      return '<button type="button" class="chip" data-ejemplo="' + esc(e) + '">' + esc(e) + '</button>';
+    }).join('');
+    zona.querySelectorAll('[data-ejemplo]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        entrada.value = b.getAttribute('data-ejemplo');
+        interpretar(entrada.value, 'texto');
+      });
+    });
   }
 
   // Cuál de los dos dictados se puede usar. Se prefiere el del servidor (Whisper): funciona en
