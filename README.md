@@ -382,7 +382,6 @@ tenga cuenta o no.
 | Intérprete por reglas como respaldo, y la IA vía n8n (`STOCKVOZ_IA=n8n`) | La app de un tendero no puede dejar de funcionar porque se cayó un proveedor | Rehacer el banco con frases grabadas a tenderos reales |
 | Transcripción con Whisper en el servidor, y la Web Speech API como respaldo | Funciona en cualquier navegador y el audio no pasa por Google | Medir qué tan bien transcribe a tenderos reales, con grabaciones de verdad |
 | Las reglas no entienden cantidades con decimales: «vendí 1,5 kilos de arroz» queda sin cantidad | Todo el inventario se mueve en unidades enteras, de la base de datos para arriba | Decidir primero si la app va a manejar fracciones; es un cambio de modelo de datos, no del intérprete |
-| Por n8n, un 429 de Groq llega como «n8n respondió 500»: se pierde la diferencia entre gastar la cuota y un error de verdad. El modo directo sí la distingue (`cuota` vs `http`) | La app se comporta igual en los dos casos (cae a reglas), así que es un problema de diagnóstico, no de funcionamiento | Sacar el código del proveedor por la rama de error del nodo HTTP y responderlo, para que `src/ia.js` lo clasifique como `cuota` |
 
 El calendario completo hasta la sustentación, con riesgos y plan B del demo, está en
 [docs/plan-hasta-la-sustentacion.md](docs/plan-hasta-la-sustentacion.md).

@@ -120,6 +120,13 @@ test('respaldo por http cuando n8n responde un error o rechaza el secreto', asyn
   await respaldo(null, 'http');
 });
 
+// El flujo responde 429 cuando el que se quedó sin cuota fue el proveedor. Si esto se clasificara
+// como 'http', en los registros no se distinguiría de un error de n8n y se buscaría donde no es.
+test('respaldo por cuota cuando el flujo avisa que el proveedor respondió 429', async function () {
+  manejador = responderJson({ codigo: 429, error: 'el modelo respondió 429' }, 429);
+  await respaldo(null, 'cuota');
+});
+
 test('respaldo si n8n redirige a otro sitio: el secreto no se envía allá', async function () {
   manejador = function (req, res) { res.writeHead(302, { Location: 'http://127.0.0.1:9/robar' }); res.end(); };
   const r = await ia().interpretar('vendí 3 panes', catalogo, 1);

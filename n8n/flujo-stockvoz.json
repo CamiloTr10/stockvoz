@@ -104,6 +104,12 @@
             "redirect": {
               "followRedirects": false
             }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
           }
         }
       },
@@ -118,7 +124,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// La respuesta del proveedor ya trae los seis campos del contrato. Se añade el gasto\n// en tokens para poder medir el costo con `npm run evaluar`.\nconst r = $input.first().json;\nconst datos = JSON.parse(r.choices[0].message.content);\ndatos.uso = {\n  entrada: (r.usage && r.usage.prompt_tokens) || 0,\n  salida: (r.usage && r.usage.completion_tokens) || 0\n};\nreturn [{ json: datos }];"
+        "jsCode": "// El nodo HTTP viene con fullResponse y neverError, así que aquí llega cualquier código, no\n// solo el 200. Se mira a propósito: el 429 del proveedor es cuota agotada, y StockVoz lo\n// distingue de un error de verdad para no mandar a buscar el problema al lugar equivocado.\nconst r = $input.first().json;\nif (r.statusCode !== 200) {\n  const codigo = r.statusCode === 429 ? 429 : 502;\n  return [{ json: { codigo: codigo, error: 'el modelo respondió ' + r.statusCode } }];\n}\n// La respuesta del proveedor ya trae los seis campos del contrato. Se añade el gasto\n// en tokens para poder medir el costo con `npm run evaluar`.\nconst datos = JSON.parse(r.body.choices[0].message.content);\ndatos.uso = {\n  entrada: (r.body.usage && r.body.usage.prompt_tokens) || 0,\n  salida: (r.body.usage && r.body.usage.completion_tokens) || 0\n};\nreturn [{ json: datos }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -132,7 +138,9 @@
     {
       "parameters": {
         "respondWith": "firstIncomingItem",
-        "options": {}
+        "options": {
+          "responseCode": "={{ $json.codigo || 200 }}"
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,

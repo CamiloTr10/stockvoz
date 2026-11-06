@@ -31,10 +31,28 @@ test('el flujo no lleva secretos dentro', function () {
 
 // Desde typeVersion 4 el nodo HTTP de n8n sigue redirecciones cuando la opción NO está, así que
 // se vigila que esté puesta: si alguien la quita, la clave volvería a viajar a donde la manden.
+// (Con neverError, un 3xx llega como dato y "Traducir la respuesta" lo convierte en 502; la
+// clave sigue sin salir, que es lo que importa.)
 test('el nodo HTTP no sigue redirecciones, como el modo directo', function () {
   const nodo = flujo.nodes.find(function (n) { return n.name === 'Preguntarle al modelo'; });
   assert.ok(nodo.typeVersion >= 4, 'esta prueba asume el comportamiento de typeVersion 4');
   assert.strictEqual(nodo.parameters.options.redirect.redirect.followRedirects, false);
+});
+
+// Si el nodo HTTP fallara por el código de respuesta, n8n devolvería un 500 pelado y se perdería
+// la diferencia entre "se acabó la cuota" (429) y "n8n se rompió", que src/ia.js sí distingue.
+test('el flujo deja pasar el código del proveedor en vez de fallar', function () {
+  const nodo = flujo.nodes.find(function (n) { return n.name === 'Preguntarle al modelo'; });
+  assert.deepStrictEqual(nodo.parameters.options.response.response,
+    { fullResponse: true, neverError: true });
+
+  const traducir = flujo.nodes.find(function (n) { return n.name === 'Traducir la respuesta'; });
+  assert.match(traducir.parameters.jsCode, /statusCode !== 200/, 'debe mirar el código');
+  assert.match(traducir.parameters.jsCode, /429/, 'debe distinguir el 429');
+
+  // El código de la respuesta sale del dato, no está fijo en el nodo.
+  const responder = flujo.nodes.find(function (n) { return n.name === 'Responder'; });
+  assert.strictEqual(responder.parameters.options.responseCode, '={{ $json.codigo || 200 }}');
 });
 
 test('el flujo responde 401 cuando el secreto no coincide', function () {

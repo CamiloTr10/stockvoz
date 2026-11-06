@@ -98,7 +98,9 @@ async function consultarN8n(config, fetchFn, texto, catalogo) {
       // A la IA solo le llegan la frase y los nombres de los productos del negocio.
       body: JSON.stringify({ texto: texto, catalogo: catalogo.map(function (p) { return { id: p.id, nombre: p.nombre }; }) })
     });
-    if (!r.ok) { throw fallo('http', 'n8n respondió ' + r.status); }
+    // El flujo responde 429 cuando el que se quedó sin cuota fue el proveedor, igual que el modo
+    // directo. Sin eso, gastar la cuota y un error de n8n se registran igual y se busca mal.
+    if (!r.ok) { throw fallo(r.status === 429 ? 'cuota' : 'http', 'n8n respondió ' + r.status); }
     crudo = await r.text();
   } catch (e) {
     if (e.motivo) { throw e; }

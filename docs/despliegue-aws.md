@@ -149,9 +149,8 @@ negocio es grande y se quiere que interprete la IA de verdad, hace falta un plan
 tokens por minuto. Es una decisión de presupuesto, no un cambio de código: se cambia la clave y
 nada más.
 
-Aviso de diagnóstico: con `STOCKVOZ_IA=n8n`, un 429 de Groq se registra como «n8n respondió 500».
-Si en los registros aparece eso de forma repetida, antes de buscar el problema en n8n hay que
-mirar el consumo de Groq. Con `STOCKVOZ_IA=directo` el registro sí dice `cuota`.
+En los registros se distingue: cuando el motivo es `cuota` es el límite de Groq, y cuando es
+`http` el problema está en n8n o en la red. Vale para los dos modos.
 
 ## Antes de publicar
 

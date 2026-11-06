@@ -38,13 +38,20 @@ const armar = [
 ].join('\n');
 
 const traducir = [
+  "// El nodo HTTP viene con fullResponse y neverError, así que aquí llega cualquier código, no",
+  "// solo el 200. Se mira a propósito: el 429 del proveedor es cuota agotada, y StockVoz lo",
+  "// distingue de un error de verdad para no mandar a buscar el problema al lugar equivocado.",
+  "const r = $input.first().json;",
+  "if (r.statusCode !== 200) {",
+  "  const codigo = r.statusCode === 429 ? 429 : 502;",
+  "  return [{ json: { codigo: codigo, error: 'el modelo respondió ' + r.statusCode } }];",
+  "}",
   "// La respuesta del proveedor ya trae los seis campos del contrato. Se añade el gasto",
   "// en tokens para poder medir el costo con `npm run evaluar`.",
-  "const r = $input.first().json;",
-  "const datos = JSON.parse(r.choices[0].message.content);",
+  "const datos = JSON.parse(r.body.choices[0].message.content);",
   "datos.uso = {",
-  "  entrada: (r.usage && r.usage.prompt_tokens) || 0,",
-  "  salida: (r.usage && r.usage.completion_tokens) || 0",
+  "  entrada: (r.body.usage && r.body.usage.prompt_tokens) || 0,",
+  "  salida: (r.body.usage && r.body.usage.completion_tokens) || 0",
   "};",
   "return [{ json: datos }];"
 ].join('\n');
@@ -105,14 +112,22 @@ const flujo = {
       // Igual que el modo directo (redirect: 'error' en src/ia.js): la clave no debe viajar a
       // otro sitio. El nodo HTTP de n8n sigue redirecciones por DEFECTO desde typeVersion 4, y
       // solo deja de hacerlo si la opción está presente, así que va escrita a propósito.
-      // Sin "Never Error", un 3xx hace fallar el nodo y StockVoz cae al intérprete por reglas.
-      options: { timeout: 20000, redirect: { redirect: { followRedirects: false } } }
+      // fullResponse + neverError: el nodo no falla por el código de respuesta, lo entrega. Así
+      // "Traducir la respuesta" puede distinguir el 429 (cuota agotada) de un error cualquiera;
+      // si el nodo fallara, n8n devolvería un 500 pelado y se perdería la diferencia.
+      options: {
+        timeout: 20000,
+        redirect: { redirect: { followRedirects: false } },
+        response: { response: { fullResponse: true, neverError: true } }
+      }
     }),
 
     nodo('Traducir la respuesta', 'code', 2, [880, -160], { jsCode: traducir }),
 
+    // El código sale del dato, no del nodo: 200 cuando el modelo contestó, y el que haya puesto
+    // "Traducir la respuesta" cuando no (429 por cuota, 502 por cualquier otra cosa).
     nodo('Responder', 'respondToWebhook', 1.1, [1100, -160], {
-      respondWith: 'firstIncomingItem', options: {}
+      respondWith: 'firstIncomingItem', options: { responseCode: '={{ $json.codigo || 200 }}' }
     })
   ],
   connections: {

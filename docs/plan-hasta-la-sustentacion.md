@@ -67,8 +67,9 @@ github.com/settings/billing.
   ~~redirecciones en el nodo HTTP de n8n~~, ~~el verbo omitido en el intérprete por reglas~~ y
   ~~el catálogo grande contra el límite por minuto~~ (medido: 10,6 tokens por producto, tope
   práctico unos 640 productos; está en el README y en la guía de despliegue).
-- Queda uno nuevo que salió de esa medición: por n8n, un 429 de Groq se registra como
-  «respondió 500», así que no se distingue gastar la cuota de un error de n8n.
+  Y el que salió de esa medición, ~~el 429 de Groq que por n8n se registraba como «respondió
+  500»~~, también quedó hecho el mismo día: el flujo pasa el código y StockVoz lo clasifica
+  como `cuota`.
 - Pruebas de usabilidad con las cuentas demo y ajustar los textos de error con lo que se vea.
 
 ### Semana del 27 de noviembre al 3 de diciembre

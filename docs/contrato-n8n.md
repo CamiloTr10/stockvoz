@@ -84,7 +84,8 @@ Cualquiera de estos casos hace que se use el intérprete por reglas, y la interf
 |---|---|
 | `timeout` | n8n no respondió en `N8N_TIMEOUT_MS` (6000 ms por defecto) |
 | `red` | no se pudo conectar con n8n |
-| `http` | n8n respondió con un código distinto de 200 (por ejemplo 401 por un secreto incorrecto) |
+| `cuota` | el proveedor del modelo respondió 429: se acabó la cuota. El flujo lo pasa tal cual para que no se confunda con un error de n8n, igual que en modo directo |
+| `http` | n8n respondió con otro código distinto de 200 (por ejemplo 401 por un secreto incorrecto, o 502 porque el proveedor falló) |
 | `invalida` | la respuesta no es JSON, falta `operaciones`, trae más de 5, usa valores fuera de lo permitido o nombra un producto que no está en el catálogo enviado |
 | `limite` | el negocio ya usó sus `STOCKVOZ_IA_LIMITE_DIARIO` interpretaciones con IA del día |
 
@@ -112,10 +113,20 @@ Pasos del flujo:
    `redirect: 'error'` del modo directo. **No se puede omitir**: desde `typeVersion` 4 el nodo
    sigue redirecciones cuando la opción no está, y entonces manda la cabecera `authorization`
    —con la clave— a donde apunte la redirección. Medido con un servidor que responde 302: sin la
-   opción la clave llegó al destino; con ella la petición falla con un 302 y StockVoz cae al
-   intérprete por reglas. `test/flujo-n8n.test.js` vigila que siga puesta.
-4. **Responder** el contenido del modelo tal cual (ya viene con la lista), añadiendo `uso`
-   con los tokens si se quiere medir el costo.
+   opción la clave llegó al destino; con ella el nodo se queda en el 302 y no pide nada más.
+
+   También lleva `response.response` con `fullResponse` y `neverError` en `true`, para que el
+   nodo **no falle por el código** y lo entregue como dato. Si fallara, n8n devolvería un 500
+   pelado y se perdería la diferencia entre «se acabó la cuota» y «n8n se rompió».
+4. **Mirar el código** antes de traducir: si no es 200, responder `429` cuando el proveedor dijo
+   429 y `502` en cualquier otro caso (un 3xx incluido). StockVoz traduce ese 429 a
+   `motivoRespaldo: 'cuota'`.
+5. **Responder** el contenido del modelo tal cual (ya viene con la lista), añadiendo `uso`
+   con los tokens si se quiere medir el costo. El código de la respuesta sale del dato
+   (`{{ $json.codigo || 200 }}`), no está fijo en el nodo.
+
+`test/flujo-n8n.test.js` vigila los pasos 3 y 4: que la opción de redirecciones siga puesta, que
+el nodo siga entregando el código en vez de fallar, y que el 429 siga distinguido.
 
 Con Groq el esquema va con `strict: true`, así que el modelo no puede responder otra cosa.
 De todas formas el backend valida: si algo no cuadra, usa el intérprete por reglas.
