@@ -96,14 +96,29 @@ function detectarTipo(normal) {
   return c ? { tipo: 'consulta', indice: c.index, palabras: c[0].split(' ') } : null;
 }
 
-// Devuelve { cantidad, posiciones } con las posiciones de tokens usados para la cantidad.
-function detectarCantidad(toks) {
-  // Primero los dígitos: "le vendí a un señor 3 gaseosas" es 3, no 1.
+// Números que son parte del nombre de un producto ("Gaseosa 400 ml", "Cuaderno 100 hojas").
+// Cuando el tendero dice "dos gaseosas de 400", el 400 es el producto, no la cantidad.
+function numerosDelCatalogo(catalogo) {
+  const numeros = new Set();
+  catalogo.forEach(function (producto) {
+    tokens(producto.nombre).forEach(function (t) { if (/^\d/.test(t)) { numeros.add(t); } });
+  });
+  return numeros;
+}
+
+// Un dígito suelto de la frase. `evitar` son los números que pertenecen a nombres de productos.
+function digitoSuelto(toks, evitar) {
   for (let i = 0; i < toks.length; i++) {
-    if (/^\d+$/.test(toks[i]) && !UNIDADES.test(toks[i + 1] || '')) {
-      return { cantidad: Number(toks[i]), posiciones: [i] };
-    }
+    if (!/^\d+$/.test(toks[i])) { continue; }
+    if (UNIDADES.test(toks[i + 1] || '')) { continue; }   // "500 g" es el producto, no la cantidad
+    if (evitar && evitar.has(toks[i])) { continue; }
+    return { cantidad: Number(toks[i]), posiciones: [i] };
   }
+  return null;
+}
+
+// Un número escrito con letras: "tres", "una docena", "treinta y cinco".
+function numeroEnLetras(toks) {
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i];
     if (t === 'media' && /^docenas?$/.test(toks[i + 1] || '')) { return { cantidad: 6, posiciones: [i, i + 1] }; }
@@ -121,7 +136,19 @@ function detectarCantidad(toks) {
       return { cantidad: valor, posiciones: usados };
     }
   }
-  return { cantidad: null, posiciones: [] };
+  return null;
+}
+
+// Orden a propósito, y sale de medir:
+//   1. un dígito que NO sea parte de un nombre de producto: "le vendí a un señor 3 gaseosas" es 3;
+//   2. un número en letras: "vendí dos gaseosas de 400" es 2, no 400;
+//   3. como último recurso, un dígito aunque coincida con el catálogo: "vendí 500 de arroz" es 500
+//      aunque exista "Arroz 500 g", porque si no no quedaría ninguna cantidad.
+function detectarCantidad(toks, numerosProducto) {
+  return digitoSuelto(toks, numerosProducto) ||
+    numeroEnLetras(toks) ||
+    digitoSuelto(toks, null) ||
+    { cantidad: null, posiciones: [] };
 }
 
 function tokensProducto(nombre) {
@@ -153,7 +180,9 @@ function interpretarUna(texto, catalogo) {
 
   const toks = normal.split(' ');
   const tipo = detectarTipo(normal);
-  const cant = tipo && tipo.tipo !== 'consulta' ? detectarCantidad(toks) : { cantidad: null, posiciones: [] };
+  const cant = tipo && tipo.tipo !== 'consulta'
+    ? detectarCantidad(toks, numerosDelCatalogo(catalogo))
+    : { cantidad: null, posiciones: [] };
 
   // Palabras que describen el producto: sin verbo, sin cantidad y sin palabras vacías.
   const palabras = toks.filter(function (t, i) {

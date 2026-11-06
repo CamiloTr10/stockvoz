@@ -1000,6 +1000,19 @@
           "producto": 1
         }
       ]
+    },
+    {
+      "categoria": "nombres de producto",
+      "texto": "vendí 500 de arroz",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "venta",
+          "cantidad": 500,
+          "producto": 5
+        }
+      ],
+      "regresion": true
     }
   ]
 }
