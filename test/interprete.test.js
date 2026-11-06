@@ -14,6 +14,13 @@ casos.filter(function (c) { return c.regresion; }).forEach(function (c) {
   });
 });
 
+// La coma de "1,5" es el mismo separador por el que se parten las operaciones: si se partiera
+// ahí, la app propondría una venta que el tendero nunca dijo.
+test('la coma de un decimal no inventa una operación', function () {
+  const r = interpretar('vendí 1,5 kilos de arroz y 2 panes', catalogo);
+  assert.strictEqual(r.operaciones.length, 1);
+});
+
 test('la búsqueda conserva lo que no se encontró', function () {
   assert.strictEqual(interpretar('vendí 2 chocolatinas jet', catalogo).operaciones[0].busqueda, 'chocolatinas jet');
 });

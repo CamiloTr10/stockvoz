@@ -73,14 +73,23 @@ Si el modelo se cae y las reglas devuelven una sola operación, vuelve el proble
 operaciones en silencio. Así que `src/interprete.js` parte la frase por conectores (« y », « e »,
 coma, punto y coma) y corre su lógica actual sobre cada pedazo.
 
-Para no partir donde no toca, un pedazo **sin verbo de movimiento se vuelve a pegar al anterior**
-con su separador. Así «treinta y cinco borradores» no se parte en dos (el pedazo «cinco
-borradores» no tiene verbo) y «1,5» sigue siendo un número.
+Un pedazo que trae su propio verbo abre una operación. Si no lo trae, **hereda el del pedazo
+anterior**, porque el tendero omite el verbo cuando sigue hablando de lo mismo: «vendí 2
+borradores y 3 lápices» son dos ventas.
 
-Límite conocido: una frase con el verbo omitido, como «vendí 2 borradores y 3 lápices», el
-intérprete por reglas la toma como una sola operación. El modelo sí la entiende; las reglas son
-el respaldo y prefieren juntar de más a separar mal, porque separar mal inventa operaciones que
-el tendero no dijo.
+Pero solo lo hereda si de verdad es otra operación. Un pedazo **se vuelve a pegar al anterior**,
+con su separador, en cuatro casos, y cada uno viene de una frase que se medía mal:
+
+| Caso | Ejemplo | Por qué se pega |
+|---|---|---|
+| Número compuesto | «vendí treinta **y cinco** huevos» | Es la única forma compuesta del español, y se reconoce porque el pedazo anterior termina en la decena |
+| Decimal | «vendí 1**,5** kilos de arroz» | La coma del número es el mismo separador que divide operaciones |
+| Al anterior le falta la cantidad | «entraron unos panecitos**, como diez**» | El número no abre una operación: le pone la cantidad a la que ya estaba |
+| El pedazo no tiene cantidad, o no nombra producto | «vendí 3 panes **y ya cerré**» | Sin las dos cosas no hay nada que guardar |
+
+Separar mal es peor que juntar de más: juntar de más pierde una operación que el tendero puede
+volver a dictar, mientras que separar mal **inventa** una operación que él nunca dijo y que
+confirmaría sin darse cuenta. De ahí que la duda siempre se resuelva pegando.
 
 ### Qué ve el tendero
 

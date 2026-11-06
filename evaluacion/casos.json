@@ -859,7 +859,65 @@
           "cantidad": 3,
           "producto": null
         }
-      ]
+      ],
+      "regresion": true
+    },
+    {
+      "categoria": "varias operaciones",
+      "texto": "vendí 2 panes y 3 leches",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "venta",
+          "cantidad": 2,
+          "producto": 3
+        },
+        {
+          "estado": "ok",
+          "tipo": "venta",
+          "cantidad": 3,
+          "producto": 6
+        }
+      ],
+      "regresion": true
+    },
+    {
+      "categoria": "varias operaciones",
+      "texto": "entraron 10 panes, 5 leches y 3 arroces",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "entrada",
+          "cantidad": 10,
+          "producto": 3
+        },
+        {
+          "estado": "ok",
+          "tipo": "entrada",
+          "cantidad": 5,
+          "producto": 6
+        },
+        {
+          "estado": "ok",
+          "tipo": "entrada",
+          "cantidad": 3,
+          "producto": 5
+        }
+      ],
+      "regresion": true
+    },
+    {
+      "categoria": "varias operaciones",
+      "texto": "vendí 3 panes y ya cerré",
+      "esperadas": [
+        {
+          "estado": "ok",
+          "tipo": "venta",
+          "cantidad": 3,
+          "producto": 3
+        }
+      ],
+      "regresion": true
     },
     {
       "categoria": "diminutivos",

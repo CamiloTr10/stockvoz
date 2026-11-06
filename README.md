@@ -217,17 +217,18 @@ Groq con `openai/gpt-oss-20b`, esquema estricto y `IA_ESFUERZO=low`:
 | Números en letras | 57 % | **100 %** |
 | Errores de dictado | 57 % | **100 %** |
 | Nombres de producto | 100 % | 100 % |
-| Varias operaciones en una frase | 86 % | **100 %** |
-| Diminutivos y aumentativos | 80 % | sin medir |
-| **Total** | **85 %** | **97 %** |
+| Varias operaciones en una frase | 100 % | **100 %** |
+| Diminutivos y aumentativos | 90 % | sin medir |
+| **Total** | **88 %** | **97 %** |
 
 Tiempo por frase: mediana 751 ms, p95 1,3 s (el límite antes del respaldo son 6 s), medido por el flujo de n8n.
 
-El 97 % son 60 de 62 frases, medido antes de que el banco creciera a 72. Los dos fallos de esa
+La columna de reglas son 67 de 76 frases, medidas hoy. El 97 % de Groq son 60 de 62, medido antes
+de que el banco creciera. Los dos fallos de esa
 corrida (no marcar como ambigua una «gaseosa» cuando hay dos en el catálogo, y leer «quedé sin
 arroz» como una pregunta) se corrigieron después afinando las instrucciones, y esas frases ya pasan.
 
-**Falta volver a correr el banco completo, ahora de 72 frases, con las instrucciones finales.** Se
+**Falta volver a correr el banco completo, ahora de 76 frases, con las instrucciones finales.** Se
 acabó el cupo diario de Groq (200.000 tokens) y las diez frases con diminutivos **todavía no se han
 medido con IA**: la única que alcanzó a pasar por el modelo, «vendí dos gaseositas de 400», salió
 bien, pero una golondrina no hace verano.
@@ -357,8 +358,7 @@ tenga cuenta o no.
 |---|---|---|
 | Intérprete por reglas como respaldo, y la IA vía n8n (`STOCKVOZ_IA=n8n`) | La app de un tendero no puede dejar de funcionar porque se cayó un proveedor | Rehacer el banco con frases grabadas a tenderos reales |
 | Transcripción con Whisper en el servidor, y la Web Speech API como respaldo | Funciona en cualquier navegador y el audio no pasa por Google | Medir qué tan bien transcribe a tenderos reales, con grabaciones de verdad |
-| El intérprete por reglas no separa frases con el verbo omitido («vendí 2 panes y 3 leches») | Juntar de más es preferible a separar mal, que inventaría operaciones | Heredar el verbo del pedazo anterior sin confundirlo con los números compuestos |
-| Las reglas toman como cantidad un número que es parte del nombre del producto: «vendí dos gaseosas de 400» da 400, no 2 | Viene de preferir los dígitos a los números en letras, que acierta casi siempre | Saltarse los dígitos que aparecen en algún nombre del catálogo, midiendo que no rompa «vendí 500 de arroz» |
+| Las reglas no entienden cantidades con decimales: «vendí 1,5 kilos de arroz» queda sin cantidad | Todo el inventario se mueve en unidades enteras, de la base de datos para arriba | Decidir primero si la app va a manejar fracciones; es un cambio de modelo de datos, no del intérprete |
 | El nodo HTTP de n8n no bloquea redirecciones, el modo directo sí | La URL es fija, el riesgo es bajo | Igualarlo al modo directo |
 
 El calendario completo hasta la sustentación, con riesgos y plan B del demo, está en

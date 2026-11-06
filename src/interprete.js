@@ -223,13 +223,35 @@ const MAX_OPERACIONES = 5;
 // Conectores por los que puede venir más de una operación.
 const CONECTORES = /([ ]+y[ ]+|[ ]+e[ ]+|[ ]*;[ ]*|[ ]*,[ ]*)/;
 
-// Parte la frase y vuelve a pegar los pedazos que no traen verbo de movimiento, con su
-// separador. Así "treinta y cinco borradores" no se parte (el pedazo "cinco borradores" no
-// tiene verbo) y "1,5" sigue siendo un número.
-// shortcut: si el tendero omite el verbo ("vendí 2 borradores y 3 lápices") queda una sola
-// operación; el modelo sí la separa. Juntar de más es preferible a separar mal, porque separar
-// mal inventaría operaciones que el tendero no dijo. Si hiciera falta, habría que heredar el
-// verbo del pedazo anterior sin confundirlo con los números compuestos.
+// El tendero omite el verbo cuando sigue hablando de lo mismo: "vendí 2 borradores y 3 lápices".
+// Devuelve el verbo que le toca al pedazo, o null si no es otra operación y hay que volver a
+// pegarlo al anterior. Separar de más sería peor que juntar: inventaría operaciones.
+function verboHeredado(anterior, sep, pieza) {
+  const tipo = detectarTipo(normalizar(anterior));
+  // La consulta no se hereda: "¿cuánto queda de arroz y de leche?" no trae cantidades que separar.
+  if (!tipo || tipo.tipo === 'consulta') { return null; }
+  // "1,5" se parte por la coma aunque sea un decimal, no dos operaciones.
+  if (/\d$/.test(anterior) && /^\d/.test(pieza) && sep.indexOf(' ') === -1) { return null; }
+  const toks = tokens(pieza);
+  // "treinta y cinco huevos" es un número compuesto. Es la única forma compuesta del español y
+  // se reconoce porque el pedazo anterior TERMINA en la decena ("vendí treinta" | "cinco huevos").
+  const previos = tokens(anterior);
+  const decena = NUMEROS[previos[previos.length - 1]];
+  if (sep.trim() === 'y' && decena >= 30 && decena < 100 && decena % 10 === 0 && NUMEROS[toks[0]] < 10) { return null; }
+  // Si al pedazo anterior le falta la cantidad, la del pedazo se la completa en vez de abrir otra
+  // operación: "entraron unos panecitos, como diez".
+  if (!digitoSuelto(previos, null) && !numeroEnLetras(previos)) { return null; }
+  // Sin cantidad propia no es una operación: "vendí 3 panes y ya cerré".
+  if (!digitoSuelto(toks, null) && !numeroEnLetras(toks)) { return null; }
+  // Ni sin una palabra que pueda nombrar al producto: "vendí 3 panes y 2".
+  const nombra = toks.some(function (t) {
+    return !VACIAS.has(t) && !(t in NUMEROS) && !/^\d/.test(t) && !UNIDADES.test(t);
+  });
+  return nombra ? tipo.palabras.join(' ') : null;
+}
+
+// Parte la frase y vuelve a pegar los pedazos que no son otra operación, con su separador.
+// Así "1,5" sigue siendo un número y "y ya cerré" no se vuelve una venta vacía.
 function partir(texto) {
   const trozos = String(texto).split(CONECTORES);
   // Cada parte guarda el separador que la sigue, para poder volver a pegarla tal cual.
@@ -237,9 +259,12 @@ function partir(texto) {
   for (let i = 1; i < trozos.length; i += 2) {
     const pieza = trozos[i + 1] || '';
     const ultima = partes[partes.length - 1];
-    if (detectarTipo(normalizar(pieza))) {
+    // El pedazo trae su propio verbo, o hereda el del anterior.
+    const propio = detectarTipo(normalizar(pieza));
+    const heredado = propio ? null : verboHeredado(ultima.texto, trozos[i], pieza);
+    if (propio || heredado) {
       ultima.sep = trozos[i];
-      partes.push({ texto: pieza, sep: '' });
+      partes.push({ texto: heredado ? heredado + ' ' + pieza : pieza, sep: '' });
     } else {
       ultima.texto += trozos[i] + pieza;
     }
