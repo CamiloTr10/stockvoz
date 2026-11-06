@@ -140,6 +140,7 @@
   var RUTAS = {
     '#/ingresar': vistaIngreso,
     '#/registro': vistaRegistro,
+    '#/restablecer': vistaRestablecer,
     '#/negocio': vistaNegocio,
     '#/unirme': vistaUnirme,
     '#/equipo': vistaEquipo,
@@ -150,7 +151,7 @@
     '#/movimientos': vistaMovimientos,
     '#/reportes': vistaReportes
   };
-  var PUBLICAS = ['#/ingresar', '#/registro'];
+  var PUBLICAS = ['#/ingresar', '#/registro', '#/restablecer'];
   var SIN_NEGOCIO = ['#/negocio', '#/unirme'];
 
   function rutaActual() {
@@ -193,6 +194,7 @@
           '<label for="clave">Contraseña</label><input id="clave" type="password" autocomplete="current-password" required>' +
           '<div id="error-ingreso"></div>' +
           '<button class="btn btn--grande" type="submit">Ingresar</button>' +
+          '<p class="nota"><a href="#/restablecer">¿Olvidaste tu contraseña?</a></p>' +
           '<p class="nota">¿Tu negocio aún no tiene cuenta? <a href="#/registro">Crear una cuenta</a></p>' +
         '</form>' +
         (estado.config.demo
@@ -274,6 +276,40 @@
       }).catch(function (e) { errorEn(zona, e.message); });
     });
     if (invitado && !codigo) { document.getElementById('codigo').focus(); }
+  }
+
+  // StockVoz no manda correos, así que la pantalla explica a quién pedirle el código. Sin eso,
+  // quien olvidó la clave se queda mirando un formulario que pide algo que no tiene.
+  function vistaRestablecer() {
+    render(
+      '<section class="acceso">' +
+        '<div class="acceso-marca"><img src="logo.svg" alt="" width="56" height="56"><h1>Cambiar la contraseña</h1>' +
+        '<p>Necesitas un código. Pídeselo al <b>dueño de tu negocio</b>: lo genera en la pantalla Equipo. ' +
+        'Si el dueño eres tú, pídeselo a quien administra StockVoz.</p></div>' +
+        '<form id="form-restablecer" class="tarjeta form" novalidate>' +
+          '<label for="correo">Tu correo</label><input id="correo" type="email" maxlength="120" autocomplete="username" required>' +
+          '<label for="codigo">Código</label><input id="codigo" class="entrada-codigo" maxlength="20" autocomplete="off" spellcheck="false" autocapitalize="characters" placeholder="ABCD-EFGH" required>' +
+          '<label for="clave">Contraseña nueva <small>(mínimo 8 caracteres)</small></label><input id="clave" type="password" minlength="8" autocomplete="new-password" required>' +
+          '<div id="error-restablecer"></div>' +
+          '<button class="btn btn--grande" type="submit">Cambiar la contraseña</button>' +
+          '<p class="nota"><a href="#/ingresar">Volver a ingresar</a></p>' +
+        '</form>' +
+      '</section>', 'Cambiar la contraseña');
+
+    var form = document.getElementById('form-restablecer');
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var zona = document.getElementById('error-restablecer');
+      errorEn(zona, '');
+      if (!form.correo.value.trim() || !form.codigo.value.trim()) { errorEn(zona, 'Escribe tu correo y el código que te pasaron.'); return; }
+      if (form.clave.value.length < 8) { errorEn(zona, 'La contraseña debe tener al menos 8 caracteres.'); return; }
+      var boton = form.querySelector('button[type=submit]');
+      boton.disabled = true;
+      api('POST', '/api/restablecer', { correo: form.correo.value, codigo: form.codigo.value, clave: form.clave.value })
+        .then(function (sesion) { avisar('Listo, tu contraseña cambió.'); entrar(sesion); })
+        .catch(function (e) { errorEn(zona, e.message); boton.disabled = false; });
+    });
+    document.getElementById('correo').focus();
   }
 
   function vistaNegocio() {
@@ -372,7 +408,10 @@
             return '<tr><td data-etiqueta="Persona"><b>' + esc(m.nombre) + '</b>' + (yo ? ' <small>(tú)</small>' : '') + '</td>' +
               '<td data-etiqueta="Correo">' + esc(m.correo) + '</td>' +
               '<td data-etiqueta="Permisos">' + esc(ROLES[m.rol] || m.rol) + '</td>' +
-              '<td class="acciones-fila">' + (yo ? '' : '<button type="button" class="enlace enlace--peligro" data-quitar="' + m.id +
+              '<td class="acciones-fila">' + (yo ? '' :
+                '<button type="button" class="enlace" data-restablecer="' + m.id + '" data-nombre="' + esc(m.nombre) + '">Cambiar contraseña' +
+                '<span class="visually-hidden"> de ' + esc(m.nombre) + '</span></button> ' +
+                '<button type="button" class="enlace enlace--peligro" data-quitar="' + m.id +
                 '" data-nombre="' + esc(m.nombre) + '">Quitar<span class="visually-hidden"> a ' + esc(m.nombre) + '</span></button>') + '</td></tr>';
           }).join('') + '</tbody></table></div>' +
           '<h2>Invitaciones pendientes</h2>' +
@@ -397,6 +436,26 @@
                 api('DELETE', '/api/equipo/miembros/' + b.getAttribute('data-quitar'))
                   .then(function () { avisar(nombre + ' ya no tiene acceso a este negocio.'); cargar(); })
                   .catch(function (e) { avisar(e.message, true); });
+              });
+          });
+        });
+        zona.querySelectorAll('[data-restablecer]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            var nombre = b.getAttribute('data-nombre');
+            confirmar('¿Generar un código para ' + nombre + '?',
+              'Con ese código ' + nombre + ' pone una contraseña nueva, y las sesiones que tenga abiertas se cierran. Hazlo solo si te lo pidió.',
+              'Sí, generar').then(function (ok) {
+                if (!ok) { return; }
+                api('POST', '/api/equipo/miembros/' + b.getAttribute('data-restablecer') + '/restablecer', {}).then(function (r) {
+                  zonaCodigo.innerHTML = '<div class="codigo-caja">' +
+                    '<p class="etiqueta-codigo">Código para que <b>' + esc(nombre) + '</b> cambie su contraseña · vence el ' + esc(fechaHora.format(new Date(r.expiraEn))) + '</p>' +
+                    '<p class="codigo">' + esc(r.codigo) + '</p>' +
+                    '<div class="acciones"><button type="button" class="btn btn--blanco" id="copiar-codigo">Copiar código</button></div>' +
+                    '<p class="nota">Pásaselo en persona o por WhatsApp. Lo usa en «¿Olvidaste tu contraseña?», en la pantalla de ingreso. ' +
+                    'Sirve una sola vez y no se vuelve a mostrar.</p></div>';
+                  document.getElementById('copiar-codigo').addEventListener('click', function () { copiar(r.codigo, 'código'); });
+                  zonaCodigo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }).catch(function (e) { avisar(e.message, true); });
               });
           });
         });

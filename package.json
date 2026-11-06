@@ -8,7 +8,8 @@
     "start": "node servidor.js",
     "test": "node --test",
     "evaluar": "node evaluacion/evaluar.js",
-    "flujo": "node n8n/generar-flujo.js"
+    "flujo": "node n8n/generar-flujo.js",
+    "restablecer": "node admin/restablecer.js"
   },
   "engines": {
     "node": ">=22.13"

@@ -39,3 +39,20 @@ test('si la cabecera falta o viene rara, se cae a la IP del socket en vez de fal
 test('los espacios de la cadena no se cuelan en la IP', function () {
   assert.strictEqual(ipCliente(peticion('  190.1.1.1  ,  70.70.70.70  ', '10.0.0.1'), 2), '190.1.1.1');
 });
+
+// La imagen de Docker se sube a un registro y se comparte. Si el .env se colara, las claves de
+// la base y de Groq viajarían con ella.
+test('la imagen de Docker deja por fuera el .env y trae todo lo que el servidor necesita', function () {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const raiz = path.join(__dirname, '..');
+  const ignorados = fs.readFileSync(path.join(raiz, '.dockerignore'), 'utf8').split(/\r?\n/).map(function (l) { return l.trim(); });
+  assert.ok(ignorados.indexOf('.env') !== -1, '.env debe estar en .dockerignore');
+
+  const dockerfile = fs.readFileSync(path.join(raiz, 'Dockerfile'), 'utf8');
+  assert.match(dockerfile, /^ENV NODE_ENV=production$/m, 'sin esto la app no se niega a arrancar con las cuentas demo');
+  // Todo lo que servidor.js carga al arrancar tiene que estar copiado en la imagen.
+  ['servidor.js', 'src', 'public', 'migraciones', 'admin'].forEach(function (cosa) {
+    assert.match(dockerfile, new RegExp('^COPY ' + cosa.replace('.', '\.') + ' ', 'm'), 'falta copiar ' + cosa);
+  });
+});

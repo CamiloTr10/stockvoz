@@ -272,12 +272,14 @@ stockvoz/
 ├── evaluacion/          Banco de frases (casos.json) y script npm run evaluar
 ├── servidor.js          Servidor HTTP: rutas de la API, sesión por cookie y archivos de public/
 ├── migraciones/         Cambios del esquema de PostgreSQL, numerados (001_..., 002_...)
+├── admin/               restablecer.js: código de contraseña para quien administra el servidor
+├── Dockerfile           Imagen para App Runner o ECS (ver docs/despliegue-aws.md)
 ├── src/
 │   ├── interprete.js    Frase en español → operación propuesta (tipo, producto, cantidad), por reglas
 │   ├── ia.js            Interpretación con IA: validación de la respuesta y respaldo por reglas
 │   ├── ia-instrucciones.js  Lo que recibe el modelo: instrucciones, esquema y cuerpo de la petición
 │   ├── inventario.js    Reglas del inventario: productos, movimientos, panel y reportes
-│   ├── auth.js          Cuentas, contraseñas (scrypt), sesiones, invitaciones y límite de intentos
+│   ├── auth.js          Cuentas, contraseñas (scrypt), sesiones, invitaciones, contraseña olvidada y límite de intentos
 │   ├── db.js            Pool de PostgreSQL, migraciones y transacciones
 │   ├── entorno.js       Lectura del archivo .env
 │   ├── demo.js          Datos de demostración
@@ -314,6 +316,8 @@ Todas las rutas responden JSON. Las de inventario usan siempre el negocio de la 
 | POST | `/api/equipo/invitaciones` | dueño | Crear un código (`rol`); se devuelve una sola vez |
 | DELETE | `/api/equipo/invitaciones/:id` | dueño | Cancelar una invitación sin usar |
 | DELETE | `/api/equipo/miembros/:id` | dueño | Quitar a alguien del negocio |
+| POST | `/api/equipo/miembros/:id/restablecer` | dueño | Código para que esa persona cambie su contraseña; se devuelve una sola vez |
+| POST | `/api/restablecer` | — | Cambiar la contraseña con `correo`, `codigo` y `clave`; deja la sesión iniciada |
 | GET | `/api/productos` | negocio | Lista (`?inactivos=1` incluye desactivados) |
 | POST | `/api/productos` | dueño | Crear (`nombre`, `precio`, `stock`, `stockMinimo`) |
 | PATCH | `/api/productos/:id` | dueño | Editar nombre, precio, mínimo o `activo` |
@@ -374,6 +378,22 @@ tenga cuenta o no.
 - El dueño puede cancelar una invitación sin usar y quitar a alguien del negocio; quien es quitado deja
   de ver ese negocio en el acto, y los movimientos que registró se conservan.
 - Nadie puede quitarse a sí mismo: así siempre queda al menos un dueño.
+
+### Contraseña olvidada
+
+StockVoz no manda correos, así que el código para cambiar la contraseña lo genera **alguien que ya
+confía en la persona** y se lo pasa en persona o por WhatsApp, igual que las invitaciones:
+
+- **El dueño, para alguien de su equipo**: botón «Cambiar contraseña» en la pantalla **Equipo**.
+  Solo si esa persona no tiene acceso a ningún otro negocio. La cuenta es una sola para todos sus
+  negocios, así que si no, el dueño de una tienda podría quedarse con el negocio de otro.
+- **Quien administra el servidor, para cualquiera** (sobre todo para un dueño, que no tiene a nadie
+  por encima): `npm run restablecer -- correo@ejemplo.com`, donde haya acceso a la base.
+
+La persona entra a «¿Olvidaste tu contraseña?» en la pantalla de ingreso, con su correo, el código
+y la clave nueva. El código sirve **una sola vez**, vence en **24 horas**, solo funciona con el correo
+de esa persona y uno nuevo anula el anterior. Al usarlo se cierran todas sus sesiones abiertas: si
+alguien había entrado con la clave vieja, queda por fuera.
 
 ## Decisiones y atajos conscientes
 

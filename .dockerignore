@@ -1,0 +1,9 @@
+# Lo que nunca entra a la imagen. Sobre todo .env: tiene las claves, y una imagen se comparte.
+.env
+.git
+node_modules
+datos
+test
+evaluacion
+docs
+n8n

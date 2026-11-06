@@ -32,6 +32,8 @@ No hace falta nada más. Sin Redis, sin colas, sin almacenamiento de archivos.
 
 ## Requisitos del origen
 
+Si vas a usar contenedores (App Runner con imagen, o ECS), mira primero «Con Docker», abajo.
+
 - **Node 24 o superior.** Usa `process.loadEnvFile()` y `FormData`, que no existen en versiones viejas.
 - `npm ci` para instalar. La única dependencia es `pg`.
 - Arranque: `npm start` (equivale a `node servidor.js`).
@@ -40,6 +42,21 @@ No hace falta nada más. Sin Redis, sin colas, sin almacenamiento de archivos.
   que dos instancias simultáneas no se pisen. No hay que correr nada aparte.
 - Atiende `SIGTERM`: termina las peticiones en curso y cierra la base antes de salir. Si alguna se
   cuelga, se rinde a los 10 segundos para no bloquear el despliegue.
+
+### Con Docker
+
+El repositorio trae un `Dockerfile` listo:
+
+```bash
+docker build -t stockvoz .
+docker run -p 3000:3000 -e DATABASE_URL=... -e STOCKVOZ_DEMO=0 -e STOCKVOZ_COOKIE_SEGURA=1 stockvoz
+```
+
+Probado: la imagen corre con Node 24, sin permisos de administrador, y **no lleva el `.env`**
+(`.dockerignore` lo deja por fuera, con las claves). Trae `NODE_ENV=production`, así que si falta
+`STOCKVOZ_DEMO=0` el contenedor **termina con código 1** y un mensaje que dice por qué. Eso es a
+propósito: el despliegue falla a la vista en vez de quedar publicado con cuentas cuya clave está en
+el README. Con `docker stop` se apaga limpio en un segundo.
 
 ## Comprobación de salud
 
@@ -151,6 +168,23 @@ nada más.
 
 En los registros se distingue: cuando el motivo es `cuota` es el límite de Groq, y cuando es
 `http` el problema está en n8n o en la red. Vale para los dos modos.
+
+## Cuando alguien olvida su contraseña
+
+StockVoz no manda correos. Si quien olvidó la clave es un encargado, el dueño de su negocio le
+genera el código desde la pantalla Equipo, y quien administra el servidor no tiene que hacer nada.
+
+Si es un **dueño**, no tiene a nadie por encima y el código lo tiene que generar quien administra:
+
+```bash
+node admin/restablecer.js correo@ejemplo.com
+```
+
+Se corre con la misma imagen y la misma `DATABASE_URL` que el servidor, porque necesita llegar a la
+base. En App Runner no se puede entrar al contenedor; lo más simple es correr la imagen como una
+tarea suelta de ECS cambiándole el comando por ese. El código sale en pantalla, sirve una vez y
+vence en 24 horas. **Antes de generarlo, confirma por otro medio que quien lo pide es de verdad
+el dueño de esa cuenta**: el código equivale a la cuenta entera.
 
 ## Antes de publicar
 

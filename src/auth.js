@@ -187,6 +187,70 @@ async function quitarMiembro(db, negocioId, usuarioId, quienPide) {
   if (!r.rowCount) { throw new ErrorApi(404, 'Esa persona no pertenece a este negocio.'); }
 }
 
+/* ---------- Contraseña olvidada ---------- */
+
+// StockVoz no manda correos: el código lo genera alguien que ya confía en la persona (el dueño
+// de su negocio, o quien administra el servidor) y se lo pasa por WhatsApp o en persona.
+// Un código así equivale a la cuenta entera, por eso sirve una vez y vence en un día.
+const DURACION_RESTABLECER_MS = 24 * 60 * 60 * 1000;
+
+// Devuelve el código en claro una sola vez. Uno nuevo anula los anteriores de la misma persona,
+// para que no queden varios sueltos.
+async function crearRestablecimiento(db, usuarioId, creadoPor, ahoraDado) {
+  const ahora = ahoraDado || new Date();
+  const codigo = generarCodigo();
+  await db.query('DELETE FROM restablecimientos WHERE usuario_id = $1 AND usado_en IS NULL', [usuarioId]);
+  const fila = await uno(db, 'INSERT INTO restablecimientos (codigo_hash, usuario_id, creado_por, creado_en, expira_en) VALUES ($1, $2, $3, $4, $5) RETURNING expira_en',
+    [hashToken(normalizarCodigo(codigo)), usuarioId, creadoPor || null, ahora, new Date(ahora.getTime() + DURACION_RESTABLECER_MS)]);
+  return { codigo: codigo, expiraEn: fila.expira_en };
+}
+
+// El dueño genera el código para alguien de su equipo. Solo si esa persona no tiene acceso a
+// ningún otro negocio: si no, el dueño de una tienda podría quedarse con el negocio de otro
+// (la cuenta es una sola para todos los negocios en los que está).
+async function restablecerParaMiembro(db, negocioId, usuarioId, quienPide, ahoraDado) {
+  if (usuarioId === quienPide) { throw new ErrorApi(409, 'Esto es para alguien de tu equipo que olvidó su contraseña. La tuya la conoces: ya entraste con ella.'); }
+  if (!await uno(db, 'SELECT 1 FROM membresias WHERE usuario_id = $1 AND negocio_id = $2', [usuarioId, negocioId])) {
+    throw new ErrorApi(404, 'Esa persona no pertenece a este negocio.');
+  }
+  if (await uno(db, 'SELECT 1 FROM membresias WHERE usuario_id = $1 AND negocio_id <> $2', [usuarioId, negocioId])) {
+    throw new ErrorApi(409, 'Esa persona también tiene acceso a otro negocio, así que su contraseña no la puede cambiar un solo dueño. Que se la pida a quien administra StockVoz.');
+  }
+  return crearRestablecimiento(db, usuarioId, quienPide, ahoraDado);
+}
+
+// Para quien administra el servidor (npm run restablecer): sirve para cualquier cuenta, también
+// la de un dueño, que no tiene a nadie por encima en su negocio.
+async function restablecerPorCorreo(db, correoCrudo, ahoraDado) {
+  const correo = typeof correoCrudo === 'string' ? correoCrudo.trim().toLowerCase() : '';
+  const usuario = await uno(db, 'SELECT id, nombre FROM usuarios WHERE correo = $1', [correo]);
+  if (!usuario) { throw new ErrorApi(404, 'No hay ninguna cuenta con el correo ' + correo + '.'); }
+  return Object.assign({ nombre: usuario.nombre }, await crearRestablecimiento(db, usuario.id, null, ahoraDado));
+}
+
+// Cambia la contraseña con el código y cierra todas las sesiones abiertas de esa cuenta: si
+// alguien más había entrado con la clave vieja, queda por fuera. Devuelve el id del usuario.
+async function restablecerClave(db, datos, ahoraDado) {
+  const ahora = ahoraDado || new Date();
+  const clave = typeof datos.clave === 'string' ? datos.clave : '';
+  if (clave.length < 8 || clave.length > 200) { throw new ErrorApi(400, 'La contraseña debe tener al menos 8 caracteres.'); }
+  // El mismo mensaje para correo desconocido y código malo: no revela qué correos existen.
+  const invalido = new ErrorApi(404, 'Ese código no sirve: puede estar mal escrito, ya usado o vencido, o no ser de este correo. Pide uno nuevo.');
+  const correo = typeof datos.correo === 'string' ? datos.correo.trim().toLowerCase() : '';
+  const normalizado = normalizarCodigo(datos.codigo);
+  if (normalizado.length !== LARGO_CODIGO) { throw invalido; }
+  return transaccion(db, async function (t) {
+    // Se bloquea la fila: el mismo código no puede usarse dos veces a la vez.
+    const r = await uno(t, 'SELECT r.id, r.usuario_id, r.usado_en, r.expira_en FROM restablecimientos r JOIN usuarios u ON u.id = r.usuario_id WHERE r.codigo_hash = $1 AND u.correo = $2 FOR UPDATE OF r',
+      [hashToken(normalizado), correo]);
+    if (!r || r.usado_en || r.expira_en <= ahora) { throw invalido; }
+    await t.query('UPDATE usuarios SET clave_hash = $1 WHERE id = $2', [hashClave(clave), r.usuario_id]);
+    await t.query('UPDATE restablecimientos SET usado_en = $1 WHERE id = $2', [ahora, r.id]);
+    await t.query('DELETE FROM sesiones WHERE usuario_id = $1', [r.usuario_id]);
+    return r.usuario_id;
+  });
+}
+
 // Limita intentos fallidos por correo + IP para frenar ataques de fuerza bruta.
 // shortcut: vive en memoria de un solo proceso; pasarlo a la base o a Redis si hay varias instancias.
 function crearLimitador() {
@@ -224,5 +288,6 @@ async function autenticar(db, correoCrudo, clave) {
 module.exports = {
   hashClave, autenticar, registrar, crearSesion, leerSesion, cerrarSesion, elegirNegocio,
   negociosDe, crearLimitador, DURACION_SESION_MS,
-  crearInvitacion, aceptarInvitacion, equipo, cancelarInvitacion, quitarMiembro, normalizarCodigo
+  crearInvitacion, aceptarInvitacion, equipo, cancelarInvitacion, quitarMiembro, normalizarCodigo,
+  restablecerParaMiembro, restablecerPorCorreo, restablecerClave
 };

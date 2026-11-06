@@ -126,6 +126,21 @@ async function crearApp(opciones) {
       c.cookie = cookieSesion(token, segura);
       return estadoSesion(await auth.leerSesion(base, token));
     }],
+    // Contraseña olvidada: correo + código que le pasó el dueño o quien administra StockVoz.
+    // Deja la sesión iniciada, como el registro, para no pedirle la clave nueva otra vez.
+    ['POST', /^\/api\/restablecer$/, 'nada', async function (c) {
+      // Mismo freno que el ingreso: probar códigos al azar contra un correo es fuerza bruta.
+      const clave = 'restablecer|' + String(c.cuerpo.correo || '').toLowerCase() + '|' + c.ip;
+      limitador.revisar(clave);
+      let usuarioId;
+      try { usuarioId = await auth.restablecerClave(base, c.cuerpo, ahora()); }
+      catch (e) { if (e.estado === 404) { limitador.fallo(clave); } throw e; }
+      limitador.exito(clave);
+      const negocios = await auth.negociosDe(base, usuarioId);
+      const token = await auth.crearSesion(base, usuarioId, negocios.length === 1 ? negocios[0].id : null);
+      c.cookie = cookieSesion(token, segura);
+      return estadoSesion(await auth.leerSesion(base, token));
+    }],
     ['GET', /^\/api\/sesion$/, 'sesion', function (c) { return estadoSesion(c.sesion); }],
     ['DELETE', /^\/api\/sesion$/, 'nada', async function (c) {
       await auth.cerrarSesion(base, c.token);
@@ -157,6 +172,10 @@ async function crearApp(opciones) {
     ['DELETE', /^\/api\/equipo\/invitaciones\/(\d+)$/, 'dueno', async function (c) {
       await auth.cancelarInvitacion(base, c.negocioId, Number(c.params[1]));
       return { ok: true };
+    }],
+    ['POST', /^\/api\/equipo\/miembros\/(\d+)\/restablecer$/, 'dueno', function (c) {
+      c.estado = 201;
+      return auth.restablecerParaMiembro(base, c.negocioId, Number(c.params[1]), c.sesion.usuario.id, ahora());
     }],
     ['DELETE', /^\/api\/equipo\/miembros\/(\d+)$/, 'dueno', async function (c) {
       await auth.quitarMiembro(base, c.negocioId, Number(c.params[1]), c.sesion.usuario.id);

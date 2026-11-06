@@ -24,7 +24,7 @@ test.before(async function () {
   const c = new Client({ connectionString: url });
   await c.connect();
   // CASCADE: así no hay que actualizar esta lista cada vez que una migración agrega una tabla.
-  await c.query('DROP TABLE IF EXISTS invitaciones, movimientos, productos, sesiones, membresias, usuarios, negocios, migraciones CASCADE');
+  await c.query('DROP TABLE IF EXISTS restablecimientos, invitaciones, movimientos, productos, sesiones, membresias, usuarios, negocios, migraciones CASCADE');
   await c.end();
   n8n = http.createServer(function (req, res) {
     const partes = [];
@@ -698,4 +698,110 @@ test('el service worker no se mete con las rutas /api/', function () {
   assert.strictEqual(intercepta(origen + '/app.css'), true, 'los archivos de la interfaz sí se guardan');
   assert.strictEqual(intercepta(origen + '/app.css', 'POST'), false, 'solo se guardan peticiones GET');
   assert.strictEqual(intercepta('https://fonts.googleapis.com/css2?family=Archivo'), false, 'nada de otros sitios');
+});
+
+// ---------- Contraseña olvidada ----------
+
+// Un dueño con su negocio y un encargado que solo trabaja ahí.
+async function dueñoConEncargado(negocio) {
+  const dueño = await cuentaNueva(negocio);
+  const inv = await invitar(dueño, 'encargado');
+  seqEquipo += 1;
+  const correo = 'encargado' + seqEquipo + '@stockvoz.test';
+  const api = cliente();
+  const r = await api('POST', '/api/registro', { codigo: inv.codigo, nombre: 'Encargado ' + seqEquipo, correo: correo, clave: 'clave-vieja-1' });
+  assert.strictEqual(r.estado, 201, JSON.stringify(r.datos));
+  return { dueño: dueño, encargado: { api: api, correo: correo, id: r.datos.usuario.id } };
+}
+
+async function codigoPara(dueño, usuarioId) {
+  const r = await dueño.api('POST', '/api/equipo/miembros/' + usuarioId + '/restablecer', {});
+  assert.strictEqual(r.estado, 201, JSON.stringify(r.datos));
+  return r.datos.codigo;
+}
+
+test('el dueño genera un código y el encargado cambia su contraseña con él', async function () {
+  const { dueño, encargado } = await dueñoConEncargado('Tienda restablecer A');
+  const codigo = await codigoPara(dueño, encargado.id);
+
+  const api = cliente();
+  const r = await api('POST', '/api/restablecer', { correo: encargado.correo, codigo: codigo, clave: 'clave-nueva-1' });
+  assert.strictEqual(r.estado, 200, JSON.stringify(r.datos));
+  assert.strictEqual(r.datos.negocio.nombre, 'Tienda restablecer A', 'queda adentro, en su negocio');
+
+  assert.strictEqual((await cliente()('POST', '/api/sesion', { correo: encargado.correo, clave: 'clave-vieja-1' })).estado, 401, 'la clave vieja ya no sirve');
+  assert.strictEqual((await cliente()('POST', '/api/sesion', { correo: encargado.correo, clave: 'clave-nueva-1' })).estado, 200);
+  // Si alguien había entrado con la clave vieja, queda por fuera.
+  assert.strictEqual((await encargado.api('GET', '/api/productos')).estado, 401, 'las sesiones viejas se cierran');
+});
+
+test('el código para cambiar la contraseña sirve una sola vez y solo con su correo', async function () {
+  const { dueño, encargado } = await dueñoConEncargado('Tienda restablecer B');
+  const codigo = await codigoPara(dueño, encargado.id);
+
+  const ajeno = await cliente()('POST', '/api/restablecer', { correo: dueño.correo, codigo: codigo, clave: 'me-robo-la-cuenta' });
+  assert.strictEqual(ajeno.estado, 404, 'con otro correo no sirve');
+  assert.strictEqual((await cliente()('POST', '/api/sesion', { correo: dueño.correo, clave: 'clave-segura-1' })).estado, 200, 'y la cuenta del otro sigue intacta');
+
+  assert.strictEqual((await cliente()('POST', '/api/restablecer', { correo: encargado.correo, codigo: codigo, clave: 'clave-nueva-1' })).estado, 200);
+  const otraVez = await cliente()('POST', '/api/restablecer', { correo: encargado.correo, codigo: codigo, clave: 'clave-nueva-2' });
+  assert.strictEqual(otraVez.estado, 404);
+  assert.match(otraVez.datos.error, /ya usado o vencido/);
+});
+
+test('un código nuevo anula el anterior que no se usó', async function () {
+  const { dueño, encargado } = await dueñoConEncargado('Tienda restablecer C');
+  const primero = await codigoPara(dueño, encargado.id);
+  const segundo = await codigoPara(dueño, encargado.id);
+  assert.strictEqual((await cliente()('POST', '/api/restablecer', { correo: encargado.correo, codigo: primero, clave: 'clave-nueva-1' })).estado, 404);
+  assert.strictEqual((await cliente()('POST', '/api/restablecer', { correo: encargado.correo, codigo: segundo, clave: 'clave-nueva-1' })).estado, 200);
+});
+
+// La cuenta es una sola para todos los negocios de la persona. Si el dueño de una tienda pudiera
+// cambiarle la clave a alguien que también está en otro negocio, se quedaría con ese otro.
+test('el dueño no puede cambiar la contraseña de quien también está en otro negocio', async function () {
+  const dueño = await cuentaNueva('Tienda restablecer D');
+  const inv = await invitar(dueño, 'encargado');
+  const otroDueño = await cuentaNueva('Negocio propio del que ayuda en D');
+  assert.strictEqual((await otroDueño.api('POST', '/api/invitaciones/aceptar', { codigo: inv.codigo })).estado, 200);
+
+  const r = await dueño.api('POST', '/api/equipo/miembros/' + otroDueño.id + '/restablecer', {});
+  assert.strictEqual(r.estado, 409);
+  assert.match(r.datos.error, /otro negocio/);
+});
+
+test('solo el dueño genera códigos, solo para su equipo y no para sí mismo', async function () {
+  const { dueño, encargado } = await dueñoConEncargado('Tienda restablecer E');
+  const extraño = await cuentaNueva('Negocio sin relación con E');
+  assert.strictEqual((await encargado.api('POST', '/api/equipo/miembros/' + dueño.id + '/restablecer', {})).estado, 403, 'el encargado no puede');
+  assert.strictEqual((await dueño.api('POST', '/api/equipo/miembros/' + extraño.id + '/restablecer', {})).estado, 404, 'alguien de otro negocio');
+  assert.strictEqual((await dueño.api('POST', '/api/equipo/miembros/' + dueño.id + '/restablecer', {})).estado, 409, 'a sí mismo');
+});
+
+test('un código inventado no cambia nada y la contraseña corta se rechaza', async function () {
+  const { encargado } = await dueñoConEncargado('Tienda restablecer F');
+  for (const codigo of ['ABCD-EFGH', 'corto', '', null]) {
+    assert.strictEqual((await cliente()('POST', '/api/restablecer', { correo: encargado.correo, codigo: codigo, clave: 'clave-nueva-1' })).estado, 404, String(codigo));
+  }
+  assert.strictEqual((await cliente()('POST', '/api/restablecer', { correo: encargado.correo, codigo: 'ABCD-EFGH', clave: 'corta' })).estado, 400);
+  assert.strictEqual((await cliente()('POST', '/api/sesion', { correo: encargado.correo, clave: 'clave-vieja-1' })).estado, 200, 'la clave sigue igual');
+});
+
+test('quien administra el servidor genera el código para un dueño, y vence en un día', async function () {
+  const { Pool } = require('pg');
+  const auth = require('../src/auth');
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL_PRUEBA });
+  try {
+    const dueño = await cuentaNueva('Tienda restablecer G');
+    const r = await auth.restablecerPorCorreo(pool, '  ' + dueño.correo.toUpperCase() + ' ');
+    assert.match(r.codigo, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    // Pasadas 24 horas ya no sirve.
+    const mañana = new Date(Date.now() + 24 * 60 * 60 * 1000 + 1000);
+    await assert.rejects(auth.restablecerClave(pool, { correo: dueño.correo, codigo: r.codigo, clave: 'clave-nueva-1' }, mañana), { estado: 404 });
+    // Antes de eso, sí.
+    assert.strictEqual((await cliente()('POST', '/api/restablecer', { correo: dueño.correo, codigo: r.codigo, clave: 'clave-nueva-1' })).estado, 200);
+    await assert.rejects(auth.restablecerPorCorreo(pool, 'nadie-con-este@stockvoz.test'), { estado: 404 });
+  } finally {
+    await pool.end();
+  }
 });
