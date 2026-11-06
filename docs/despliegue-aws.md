@@ -129,6 +129,30 @@ Si se despliega n8n, el `compose.yml` del repositorio sirve de punto de partida,
 dos cosas: no exponer el puerto 5678 a internet, y poner `N8N_SECRETO` e `IA_CLAVE` desde el gestor de
 secretos y no desde un `.env` en el disco.
 
+### Cuánto aguanta el plan gratuito de Groq
+
+El catálogo del negocio va completo en cada petición, así que el costo por frase crece con el
+inventario. Medido: las instrucciones solas son unos 960 tokens y **cada producto cuesta 10,6**.
+
+| Productos del negocio | Frases por minuto | Frases por día |
+|---|---|---|
+| 8 | 6 | ~157 |
+| 100 | 3 | ~87 |
+| 400 | 1 | ~37 |
+
+Los topes del plan gratuito son 8.000 tokens por minuto y 200.000 por día. A partir de unos **640
+productos una sola frase ya no cabe** en el límite por minuto.
+
+**Esto no tumba la app.** Cuando Groq responde 429, StockVoz interpreta con su intérprete por
+reglas, que acierta el 88 % del banco; está comprobado con un catálogo de 401 productos. Pero si el
+negocio es grande y se quiere que interprete la IA de verdad, hace falta un plan de pago con más
+tokens por minuto. Es una decisión de presupuesto, no un cambio de código: se cambia la clave y
+nada más.
+
+Aviso de diagnóstico: con `STOCKVOZ_IA=n8n`, un 429 de Groq se registra como «n8n respondió 500».
+Si en los registros aparece eso de forma repetida, antes de buscar el problema en n8n hay que
+mirar el consumo de Groq. Con `STOCKVOZ_IA=directo` el registro sí dice `cuota`.
+
 ## Antes de publicar
 
 - [ ] `STOCKVOZ_DEMO=0`. La app se niega a arrancar si no, pero compruébalo igual.
@@ -158,5 +182,5 @@ secretos y no desde un `.env` en el disco.
 | No se puede ingresar; la sesión se pierde al recargar | CloudFront no está reenviando las cookies en `/api/*` |
 | «Ruta no encontrada» al guardar | Faltan POST/PATCH/DELETE en los métodos permitidos |
 | La app no arranca y habla de cuentas de demostración | Falta `STOCKVOZ_DEMO=0` |
-| Siempre dice que interpretó «por reglas» | Se acabó el cupo diario de Groq, o n8n no responde. **La app sigue funcionando**: es el respaldo haciendo su trabajo |
+| Siempre dice que interpretó «por reglas» | Se acabó el cupo de Groq, o n8n no responde. **La app sigue funcionando**: es el respaldo haciendo su trabajo. Si el negocio tiene muchos productos, es lo normal con el plan gratuito: ver abajo |
 | El dictado falla siempre | El POST de audio se está recortando, o el tiempo de espera es muy corto |

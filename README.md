@@ -236,6 +236,29 @@ Gasto: unos 900 tokens por frase, así que los 200.000 diarios del plan gratuito
 o sea unas tres corridas del banco completo por día. Pasado ese tope, Groq responde 429 y todo cae al
 respaldo por reglas: la app sigue funcionando, pero ya no es la IA la que interpreta.
 
+### Cuánto cabe: el catálogo contra el límite por minuto
+
+El catálogo entero va en cada petición, así que cuanto más grande el negocio, más caro cada frase.
+Medido el 5 de noviembre con nombres como los de una tienda de verdad («Gaseosa Postobón 1,5 L»):
+
+| Productos | Tokens de entrada | Total por frase | Frases por minuto | Frases por día |
+|---|---|---|---|---|
+| 8 (el banco) | 1.049 | ~1.270 | 6 | ~157 |
+| 100 | 2.018 | ~2.300 | 3 | ~87 |
+| 400 | 5.192 | ~5.350 | 1 | ~37 |
+
+Las tres filas de entrada son medidas; el resto sale de ellas. Las instrucciones solas son unos
+960 tokens y **cada producto cuesta 10,6**, así que a partir de unos **640 productos una sola frase
+ya no cabe** en el límite de 8.000 tokens por minuto, que Groq confirma en la cabecera
+`x-ratelimit-limit-tokens`.
+
+Esto no rompe nada, y se comprobó: con 401 productos, la primera frase la contesta la IA y las
+siguientes caen al intérprete por reglas, **que las contesta bien igual**. Pero quiere decir que el
+plan gratuito alcanza para el demo y para un negocio pequeño, no para una tienda surtida en hora
+pico. Para eso hay que pagar un plan con más tokens por minuto, o mandarle al modelo solo una parte
+del catálogo en vez de todo (lo segundo es gratis pero limita la precisión al acierto del filtro,
+que es justo lo que la IA viene a mejorar).
+
 **Ojo con este 100 %:** las 55 frases las escribimos nosotros, no son de tenderos reales. Sirve para
 ver que el modelo entiende el español coloquial y los errores de dictado, no para decir que el
 problema está resuelto. El banco hay que rehacerlo con frases grabadas de verdad.
@@ -359,6 +382,7 @@ tenga cuenta o no.
 | Intérprete por reglas como respaldo, y la IA vía n8n (`STOCKVOZ_IA=n8n`) | La app de un tendero no puede dejar de funcionar porque se cayó un proveedor | Rehacer el banco con frases grabadas a tenderos reales |
 | Transcripción con Whisper en el servidor, y la Web Speech API como respaldo | Funciona en cualquier navegador y el audio no pasa por Google | Medir qué tan bien transcribe a tenderos reales, con grabaciones de verdad |
 | Las reglas no entienden cantidades con decimales: «vendí 1,5 kilos de arroz» queda sin cantidad | Todo el inventario se mueve en unidades enteras, de la base de datos para arriba | Decidir primero si la app va a manejar fracciones; es un cambio de modelo de datos, no del intérprete |
+| Por n8n, un 429 de Groq llega como «n8n respondió 500»: se pierde la diferencia entre gastar la cuota y un error de verdad. El modo directo sí la distingue (`cuota` vs `http`) | La app se comporta igual en los dos casos (cae a reglas), así que es un problema de diagnóstico, no de funcionamiento | Sacar el código del proveedor por la rama de error del nodo HTTP y responderlo, para que `src/ia.js` lo clasifique como `cuota` |
 
 El calendario completo hasta la sustentación, con riesgos y plan B del demo, está en
 [docs/plan-hasta-la-sustentacion.md](docs/plan-hasta-la-sustentacion.md).

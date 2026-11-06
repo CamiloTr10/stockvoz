@@ -63,10 +63,12 @@ github.com/settings/billing.
 
 ### Semana del 20 al 26 de noviembre
 
-- Cerrar los cabos técnicos sueltos:
-  - medir qué pasa con un catálogo grande contra el límite de 8.000 tokens por minuto.
-  - ~~protección contra redirecciones en el nodo HTTP de n8n~~ y ~~el límite del intérprete por
-    reglas con el verbo omitido~~: hechos el 5 de noviembre.
+- Cerrar los cabos técnicos sueltos. Los tres que había quedaron hechos el 5 de noviembre:
+  ~~redirecciones en el nodo HTTP de n8n~~, ~~el verbo omitido en el intérprete por reglas~~ y
+  ~~el catálogo grande contra el límite por minuto~~ (medido: 10,6 tokens por producto, tope
+  práctico unos 640 productos; está en el README y en la guía de despliegue).
+- Queda uno nuevo que salió de esa medición: por n8n, un 429 de Groq se registra como
+  «respondió 500», así que no se distingue gastar la cuota de un error de n8n.
 - Pruebas de usabilidad con las cuentas demo y ajustar los textos de error con lo que se vea.
 
 ### Semana del 27 de noviembre al 3 de diciembre
