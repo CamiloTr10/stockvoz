@@ -102,7 +102,11 @@ const flujo = {
       sendBody: true,
       specifyBody: 'json',
       jsonBody: '={{ JSON.stringify($json.cuerpo) }}',
-      options: { timeout: 20000 }
+      // Igual que el modo directo (redirect: 'error' en src/ia.js): la clave no debe viajar a
+      // otro sitio. El nodo HTTP de n8n sigue redirecciones por DEFECTO desde typeVersion 4, y
+      // solo deja de hacerlo si la opción está presente, así que va escrita a propósito.
+      // Sin "Never Error", un 3xx hace fallar el nodo y StockVoz cae al intérprete por reglas.
+      options: { timeout: 20000, redirect: { redirect: { followRedirects: false } } }
     }),
 
     nodo('Traducir la respuesta', 'code', 2, [880, -160], { jsCode: traducir }),

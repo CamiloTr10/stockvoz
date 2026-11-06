@@ -107,6 +107,13 @@ Pasos del flujo:
 3. **Llamar al modelo** con el cuerpo generado, poniendo el catálogo recibido y la frase recibida.
    La clave del proveedor **no va dentro del flujo**: se lee del entorno (`$env.IA_CLAVE`), que
    `compose.yml` saca del `.env`.
+
+   El nodo HTTP lleva `redirect.redirect.followRedirects` en `false`, igual que el
+   `redirect: 'error'` del modo directo. **No se puede omitir**: desde `typeVersion` 4 el nodo
+   sigue redirecciones cuando la opción no está, y entonces manda la cabecera `authorization`
+   —con la clave— a donde apunte la redirección. Medido con un servidor que responde 302: sin la
+   opción la clave llegó al destino; con ella la petición falla con un 302 y StockVoz cae al
+   intérprete por reglas. `test/flujo-n8n.test.js` vigila que siga puesta.
 4. **Responder** el contenido del modelo tal cual (ya viene con la lista), añadiendo `uso`
    con los tokens si se quiere medir el costo.
 

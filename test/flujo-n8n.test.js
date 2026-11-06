@@ -29,6 +29,14 @@ test('el flujo no lleva secretos dentro', function () {
   assert.ok(texto.includes('$env.N8N_SECRETO'), 'el secreto debe leerse del entorno');
 });
 
+// Desde typeVersion 4 el nodo HTTP de n8n sigue redirecciones cuando la opción NO está, así que
+// se vigila que esté puesta: si alguien la quita, la clave volvería a viajar a donde la manden.
+test('el nodo HTTP no sigue redirecciones, como el modo directo', function () {
+  const nodo = flujo.nodes.find(function (n) { return n.name === 'Preguntarle al modelo'; });
+  assert.ok(nodo.typeVersion >= 4, 'esta prueba asume el comportamiento de typeVersion 4');
+  assert.strictEqual(nodo.parameters.options.redirect.redirect.followRedirects, false);
+});
+
 test('el flujo responde 401 cuando el secreto no coincide', function () {
   const si = flujo.nodes.find(function (n) { return n.name === '¿Secreto correcto?'; });
   assert.ok(si, 'falta el nodo que compara el secreto');

@@ -64,9 +64,9 @@ github.com/settings/billing.
 ### Semana del 20 al 26 de noviembre
 
 - Cerrar los cabos técnicos sueltos:
-  - protección contra redirecciones en el nodo HTTP de n8n (el modo directo ya la tiene);
-  - medir qué pasa con un catálogo grande contra el límite de 8.000 tokens por minuto;
-  - el límite del intérprete por reglas con el verbo omitido, si sobra tiempo.
+  - medir qué pasa con un catálogo grande contra el límite de 8.000 tokens por minuto.
+  - ~~protección contra redirecciones en el nodo HTTP de n8n~~ y ~~el límite del intérprete por
+    reglas con el verbo omitido~~: hechos el 5 de noviembre.
 - Pruebas de usabilidad con las cuentas demo y ajustar los textos de error con lo que se vea.
 
 ### Semana del 27 de noviembre al 3 de diciembre
