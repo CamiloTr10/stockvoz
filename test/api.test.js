@@ -37,6 +37,13 @@ test.before(async function () {
 });
 test.after(function () { servidor.close(); n8n.close(); n8n.closeAllConnections(); });
 
+test("/api/salud responde sin sesión y toca la base", async function () {
+  const r = await cliente()("GET", "/api/salud");
+  assert.strictEqual(r.estado, 200);
+  assert.strictEqual(r.datos.estado, "ok");
+  assert.ok(r.datos.version, "debe decir la versión, para saber qué quedó desplegado");
+});
+
 // Cliente mínimo que guarda la cookie de sesión como lo haría el navegador.
 function cliente() {
   let cookie = '';

@@ -59,6 +59,7 @@ El servidor lee `.env` al arrancar; si una variable ya existe en el sistema, esa
 | `DATABASE_URL_PRUEBA` | — (para `node --test`) | Base que las pruebas **borran** en cada corrida; su nombre debe terminar en `_prueba` |
 | `STOCKVOZ_DEMO` | `1` | `0` para no cargar las cuentas y negocios de demostración |
 | `STOCKVOZ_COOKIE_SEGURA` | `0` | `1` para que la cookie de sesión solo viaje por HTTPS (obligatorio al publicar) |
+| `STOCKVOZ_PROXIES_CONFIABLES` | `0` | Cuántos proxies propios hay delante (CloudFront, balanceador). Sin esto la IP del cliente se pierde; con esto de más, cualquiera podría falsearla |
 | `STOCKVOZ_IA` | `0` | `n8n` o `directo` para interpretar con IA, con las reglas como respaldo (ver abajo) |
 | `N8N_URL`, `N8N_SECRETO` | — | Webhook de n8n y secreto compartido (mínimo 16 caracteres). Obligatorias con `STOCKVOZ_IA=n8n` |
 | `IA_CLAVE`, `IA_URL`, `IA_MODELO` | Groq / `gpt-oss-20b` | Clave y modelo del proveedor. `IA_CLAVE` es obligatoria con `STOCKVOZ_IA=directo` |
@@ -70,6 +71,11 @@ El servidor lee `.env` al arrancar; si una variable ya existe en el sistema, esa
 
 **Dictado por voz:** funciona en Chrome y Edge (Web Speech API). El navegador envía el audio a su
 servicio de reconocimiento y StockVoz solo recibe el texto. En otros navegadores se usa el campo de texto.
+
+**Al publicar.** `STOCKVOZ_DEMO=0` es obligatorio: las cuentas de demostración usan una clave que está
+en este README, a la vista de cualquiera. La app **se niega a arrancar** si detecta un despliegue
+público con esas cuentas encendidas. El paso a paso completo para AWS está en
+[docs/despliegue-aws.md](docs/despliegue-aws.md).
 
 ## Pruebas
 

@@ -14,6 +14,7 @@ const { crearVoz, configDesdeEntorno: configVozDesdeEntorno, MAX_AUDIO } = requi
 const { sembrarSiVacia } = require('./src/demo');
 const { ErrorApi } = require('./src/errores');
 
+const VERSION = require('./package.json').version;
 const PUBLICO = path.join(__dirname, 'public');
 const MAX_CUERPO = 16 * 1024;
 const COOKIE = 'sv_sesion';
@@ -25,6 +26,19 @@ const CABECERAS = {
   'X-Frame-Options': 'DENY',
   'Permissions-Policy': 'microphone=(self), camera=(), geolocation=()'
 };
+
+// Detrás de un CDN o un balanceador (CloudFront, ALB) la IP del socket es la del proxy, no la
+// del cliente. Solo se cree en X-Forwarded-For cuando STOCKVOZ_PROXIES_CONFIABLES dice cuántos
+// saltos propios hay delante: cualquiera puede inventarse esa cabecera, así que creerle sin
+// saber quién está delante sería peor que no usarla. El valor que importa es el que puso el
+// proxy más cercano, así que se cuenta desde el final de la cadena hacia atrás.
+function ipCliente(req, proxiesConfiables) {
+  if (!proxiesConfiables) { return req.socket.remoteAddress; }
+  const cadena = String(req.headers['x-forwarded-for'] || '')
+    .split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+  const i = cadena.length - proxiesConfiables;
+  return (i >= 0 && cadena[i]) || req.socket.remoteAddress;
+}
 
 function leerCookie(req) {
   const m = (req.headers.cookie || '').match(new RegExp('(?:^|;\\s*)' + COOKIE + '=([^;]+)'));
@@ -81,11 +95,18 @@ async function crearApp(opciones) {
   const limitadorCodigos = auth.crearLimitador();
   const ia = crearIA(opciones.ia, { fetch: opciones.fetchIA, avisar: opciones.avisarIA });
   const voz = crearVoz(opciones.voz, { fetch: opciones.fetchVoz });
+  const proxies = Number(opciones.proxies) || 0;
   const segura = Boolean(opciones.cookieSegura);
 
   // Rutas: [método, patrón, requiere ('nada' | 'sesion' | 'negocio' | 'dueno'), manejador]
   const RUTAS = [
     ['GET', /^\/api\/config$/, 'nada', function () { return { demo: demo, voz: voz.activa }; }],
+    // Lo consultan App Runner y los balanceadores de Amazon. Toca la base a propósito: una app
+    // que responde pero no puede leer el inventario no está sana, y seguirían mandándole gente.
+    ['GET', /^\/api\/salud$/, 'nada', async function () {
+      await base.query('SELECT 1');
+      return { estado: 'ok', version: VERSION };
+    }],
     ['POST', /^\/api\/registro$/, 'nada', async function (c) {
       const r = await auth.registrar(base, c.cuerpo, ahora());
       const token = await auth.crearSesion(base, r.usuarioId, r.negocioId);
@@ -189,7 +210,7 @@ async function crearApp(opciones) {
     if (!ruta) {
       throw new ErrorApi(candidatas.length ? 405 : 404, candidatas.length ? 'Método no permitido.' : 'Ruta no encontrada.');
     }
-    const c = { url: url, params: ruta[1].exec(url.pathname), token: leerCookie(req), ip: req.socket.remoteAddress, estado: 200, cookie: null };
+    const c = { url: url, params: ruta[1].exec(url.pathname), token: leerCookie(req), ip: ipCliente(req, proxies), estado: 200, cookie: null };
     // El audio necesita un cuerpo mucho mayor: base64 lo engorda una tercera parte.
     c.cuerpo = await leerCuerpo(req, url.pathname === '/api/transcribir' ? Math.ceil(MAX_AUDIO * 4 / 3) + 1024 : MAX_CUERPO);
     if (ruta[2] !== 'nada') {
@@ -239,14 +260,39 @@ async function crearApp(opciones) {
 if (require.main === module) {
   const puerto = Number(process.env.PORT) || 3000;
   // En producción (HTTPS) usar STOCKVOZ_COOKIE_SEGURA=1 para que la cookie solo viaje cifrada.
+  const demo = process.env.STOCKVOZ_DEMO !== '0';
+  const cookieSegura = process.env.STOCKVOZ_COOKIE_SEGURA === '1';
+  const pareceProduccion = cookieSegura || process.env.NODE_ENV === 'production';
+  // Las cuentas de demostración usan una clave que está publicada en el README. En local son
+  // comodísimas; en internet son una puerta abierta. Mejor no arrancar que arrancar inseguro.
+  if (demo && pareceProduccion) {
+    console.error('No se pudo iniciar StockVoz: esto parece un despliegue público y STOCKVOZ_DEMO sigue encendida.\n' +
+      'Las cuentas de demostración usan una clave publicada en el README: cualquiera podría entrar.\n' +
+      'Pon STOCKVOZ_DEMO=0 para publicar, o quita STOCKVOZ_COOKIE_SEGURA/NODE_ENV si esto es desarrollo local.');
+    process.exit(1);
+  }
+  if (process.env.NODE_ENV === 'production' && !cookieSegura) {
+    console.warn('[aviso] NODE_ENV=production sin STOCKVOZ_COOKIE_SEGURA=1: la cookie de sesión podría viajar sin cifrar.');
+  }
+
   let configIA = null;
   let configVoz = null;
   try {
     configIA = configDesdeEntorno(process.env);
     configVoz = configVozDesdeEntorno(process.env);
   } catch (e) { console.error('No se pudo iniciar StockVoz: ' + e.message); process.exit(1); }
-  crearApp({ urlDb: process.env.DATABASE_URL, demo: process.env.STOCKVOZ_DEMO !== '0', cookieSegura: process.env.STOCKVOZ_COOKIE_SEGURA === '1', ia: configIA, voz: configVoz })
+  crearApp({ urlDb: process.env.DATABASE_URL, demo: demo, cookieSegura: cookieSegura, ia: configIA, voz: configVoz, proxies: process.env.STOCKVOZ_PROXIES_CONFIABLES })
     .then(function (servidor) {
+      // Al desplegar, Amazon manda SIGTERM y espera. Sin esto se cortan peticiones a medias y
+      // la conexión a la base queda colgada; servidor.close() también cierra el pool.
+      ['SIGTERM', 'SIGINT'].forEach(function (senal) {
+        process.once(senal, function () {
+          console.log('Cerrando StockVoz…');
+          servidor.close(function () { process.exit(0); });
+          // Si una petición se queda colgada, no bloquear el despliegue para siempre.
+          setTimeout(function () { process.exit(0); }, 10000).unref();
+        });
+      });
       servidor.listen(puerto, function () {
         console.log('StockVoz escuchando en http://localhost:' + puerto +
           (configIA ? ' (IA activa vía ' + configIA.modo + ')' : ' (interpretación solo por reglas)') +
@@ -259,4 +305,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { crearApp };
+module.exports = { crearApp, ipCliente };
